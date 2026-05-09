@@ -353,20 +353,18 @@ install_packages() {
     fi
 
     # AMD VA-API: hardware video decode offload (reduces CPU load + improves battery)
-    # Only swap x86_64 — i686 variants cause version-mismatch conflicts because
-    # the freeworld i686 pulls in a newer mesa-vulkan-drivers.i686 than the
-    # installed x86_64 version. Flatpak Steam manages its own 32-bit libs anyway.
-    # Each swap runs in a subshell so a failed DNF transaction can't poison
-    # the next DNF call (failed transactions leave the DB in a dirty state).
+    # Explicitly use .x86_64 suffix to prevent DNF multilib from pulling i686
+    # into the same transaction (causes version-mismatch conflicts with the
+    # installed x86_64 mesa-vulkan-drivers). Each call is subshelled so a
+    # failed transaction can't poison the next DNF call.
     for pkg in mesa-va-drivers mesa-vdpau-drivers; do
         local free_pkg="${pkg}-freeworld"
         if pkg_installed "$free_pkg"; then
             log_warn "$free_pkg already installed"
         else
-            log_info "Swapping $pkg → $free_pkg..."
-            (sudo dnf swap -y "$pkg" "$free_pkg" --allowerasing) 2>/dev/null || \
-                (sudo dnf install -y "$free_pkg") 2>/dev/null || \
-                log_warn "Could not install $free_pkg — skipping"
+            log_info "Swapping ${pkg}.x86_64 → ${free_pkg}.x86_64..."
+            (sudo dnf swap -y "${pkg}.x86_64" "${free_pkg}.x86_64" --allowerasing) || \
+                log_warn "Could not swap $pkg → $free_pkg — skipping"
         fi
     done
     (dnf_install_bulk libva-utils) || log_warn "Could not install libva-utils — skipping"
