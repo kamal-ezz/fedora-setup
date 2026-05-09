@@ -38,6 +38,7 @@ list_sections() {
     echo "  packages     Package installation"
     echo "  ms-fonts     Microsoft fonts"
     echo "  extra-tools  yt-dlp, Neovim, opencode"
+    echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
     echo "  nvidia       NVIDIA drivers"
     echo "  fonts        MesloLGS NF fonts"
@@ -268,7 +269,7 @@ install_packages() {
         `# Gaming` \
         gamemode mangohud lutris goverlay wine \
         `# Apps` \
-        google-chrome-stable ghostty libreoffice steam code \
+        google-chrome-stable libreoffice steam code \
         protonvpn-cli \
         `# GNOME` \
         papirus-icon-theme gnome-tweaks \
@@ -374,10 +375,63 @@ install_extra_tools() {
     fi
 }
 
-# ─── Section 8: Flatpak + Flathub ────────────────────────────────────────────
+# ─── Section 8: Ghostty (build from source) ──────────────────────────────────
+
+install_ghostty() {
+    log_section "Section 8: Ghostty (build from source)"
+
+    if cmd_exists ghostty; then
+        log_warn "Ghostty already installed, skipping"
+        summary_skip "Ghostty (already installed)"
+        return
+    fi
+
+    # Build dependencies
+    dnf_install_bulk gtk4-devel gtk4-layer-shell-devel libadwaita-devel gettext
+
+    # zvm (Zig Version Manager)
+    local ZVM_BIN="$HOME/.zvm/self/zvm"
+    if [[ -x "$ZVM_BIN" ]]; then
+        log_warn "zvm already installed"
+    else
+        log_info "Installing zvm..."
+        local ZVM_SCRIPT="/tmp/zvm-install.sh"
+        curl -fsSL https://www.zvm.app/install.sh -o "$ZVM_SCRIPT"
+        bash "$ZVM_SCRIPT"
+        rm -f "$ZVM_SCRIPT"
+    fi
+
+    export PATH="$HOME/.zvm/bin:$HOME/.zvm/self:$PATH"
+
+    # Latest stable Ghostty tag
+    local GHOSTTY_TAG
+    GHOSTTY_TAG=$(curl -fsSL https://api.github.com/repos/ghostty-org/ghostty/releases/latest \
+        | grep '"tag_name"' | grep -o '"[^"]*"' | tail -1 | tr -d '"')
+    log_info "Cloning Ghostty $GHOSTTY_TAG..."
+
+    local GHOSTTY_SRC="/tmp/ghostty-src"
+    rm -rf "$GHOSTTY_SRC"
+    git clone --depth=1 --branch "$GHOSTTY_TAG" \
+        https://github.com/ghostty-org/ghostty.git "$GHOSTTY_SRC"
+
+    # Install the exact Zig version the release requires
+    local ZIG_VERSION
+    ZIG_VERSION=$(cat "$GHOSTTY_SRC/.zigversion")
+    log_info "Installing Zig $ZIG_VERSION via zvm..."
+    zvm install "$ZIG_VERSION"
+    zvm use "$ZIG_VERSION"
+
+    log_info "Building Ghostty (this will take a few minutes)..."
+    (cd "$GHOSTTY_SRC" && zig build -Doptimize=ReleaseFast --prefix "$HOME/.local")
+
+    rm -rf "$GHOSTTY_SRC"
+    summary_ok "Ghostty $GHOSTTY_TAG (built from source)"
+}
+
+# ─── Section 9: Flatpak + Flathub ────────────────────────────────────────────
 
 setup_flatpak() {
-    log_section "Section 8: Flatpak + Flathub"
+    log_section "Section 9: Flatpak + Flathub"
 
     dnf_install_bulk flatpak gnome-software-plugin-flatpak
 
@@ -400,10 +454,10 @@ setup_flatpak() {
     fi
 }
 
-# ─── Section 9: NVIDIA Drivers ───────────────────────────────────────────────
+# ─── Section 10: NVIDIA Drivers ───────────────────────────────────────────────
 
 install_nvidia() {
-    log_section "Section 9: NVIDIA Drivers"
+    log_section "Section 10: NVIDIA Drivers"
 
     if pkg_installed akmod-nvidia; then
         log_warn "akmod-nvidia already installed, skipping"
@@ -436,10 +490,10 @@ install_nvidia() {
     summary_ok "NVIDIA drivers (reboot required)"
 }
 
-# ─── Section 10: Fonts ───────────────────────────────────────────────────────
+# ─── Section 11: Fonts ───────────────────────────────────────────────────────
 
 install_fonts() {
-    log_section "Section 10: Fonts (MesloLGS NF)"
+    log_section "Section 11: Fonts (MesloLGS NF)"
 
     local FONT_DIR="$HOME/.local/share/fonts"
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
@@ -468,10 +522,10 @@ install_fonts() {
     summary_ok "MesloLGS NF fonts"
 }
 
-# ─── Section 11: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
+# ─── Section 12: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
 
 install_shell_extras() {
-    log_section "Section 11: Oh My Zsh + Powerlevel10k + Plugins"
+    log_section "Section 12: Oh My Zsh + Powerlevel10k + Plugins"
 
     if [[ -d "$HOME/.oh-my-zsh" ]]; then
         log_warn "Oh My Zsh already installed"
@@ -514,10 +568,10 @@ install_shell_extras() {
     summary_ok "Oh My Zsh + Powerlevel10k + plugins"
 }
 
-# ─── Section 12: fnm + Node.js LTS + global packages ─────────────────────────
+# ─── Section 13: fnm + Node.js LTS + global packages ─────────────────────────
 
 install_node() {
-    log_section "Section 12: fnm + Node.js LTS"
+    log_section "Section 13: fnm + Node.js LTS"
 
     local FNM_BIN="$HOME/.local/bin/fnm"
     mkdir -p "$HOME/.local/bin"
@@ -569,10 +623,10 @@ install_node() {
     summary_ok "fnm + Node.js LTS + global packages"
 }
 
-# ─── Section 13: SSH Key Setup ────────────────────────────────────────────────
+# ─── Section 14: SSH Key Setup ────────────────────────────────────────────────
 
 setup_ssh() {
-    log_section "Section 13: SSH Key Setup"
+    log_section "Section 14: SSH Key Setup"
 
     local SSH_KEY="$HOME/.ssh/id_ed25519"
 
@@ -606,10 +660,10 @@ setup_ssh() {
     summary_ok "SSH key"
 }
 
-# ─── Section 14: Services (Docker, Bluetooth, Firewall) ──────────────────────
+# ─── Section 15: Services (Docker, Bluetooth, Firewall) ──────────────────────
 
 setup_services() {
-    log_section "Section 14: Services (Docker, Bluetooth, Firewall)"
+    log_section "Section 15: Services (Docker, Bluetooth, Firewall)"
 
     # Docker
     log_info "Enabling Docker service..."
@@ -653,10 +707,10 @@ setup_services() {
     summary_ok "Docker + Bluetooth + Firewall"
 }
 
-# ─── Section 15: Virtualization ──────────────────────────────────────────────
+# ─── Section 16: Virtualization ──────────────────────────────────────────────
 
 setup_virtualization() {
-    log_section "Section 15: Virtualization"
+    log_section "Section 16: Virtualization"
 
     if sudo dnf group list --installed 2>/dev/null | grep -q "Virtualization"; then
         log_warn "Virtualization group already installed"
@@ -680,10 +734,10 @@ setup_virtualization() {
     summary_ok "Virtualization"
 }
 
-# ─── Section 16: Snapper (Btrfs snapshots) ───────────────────────────────────
+# ─── Section 17: Snapper (Btrfs snapshots) ───────────────────────────────────
 
 setup_snapper() {
-    log_section "Section 16: Snapper (Btrfs Snapshots)"
+    log_section "Section 17: Snapper (Btrfs Snapshots)"
 
     if ! findmnt -n -o FSTYPE / 2>/dev/null | grep -q btrfs; then
         log_warn "Root filesystem is not Btrfs — skipping Snapper setup."
@@ -730,10 +784,10 @@ setup_snapper() {
     summary_ok "Snapper (Btrfs snapshots)"
 }
 
-# ─── Section 17: VS Code ─────────────────────────────────────────────────────
+# ─── Section 18: VS Code ─────────────────────────────────────────────────────
 
 setup_vscode() {
-    log_section "Section 17: VS Code Extensions + Theme"
+    log_section "Section 18: VS Code Extensions + Theme"
 
     if ! cmd_exists code; then
         log_warn "VS Code not installed, skipping"
@@ -773,10 +827,10 @@ EOF
     fi
 }
 
-# ─── Section 18: GNOME Configuration ─────────────────────────────────────────
+# ─── Section 19: GNOME Configuration ─────────────────────────────────────────
 
 configure_gnome() {
-    log_section "Section 18: GNOME Configuration"
+    log_section "Section 19: GNOME Configuration"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session detected (running via SSH?). Skipping GNOME settings."
@@ -888,10 +942,10 @@ EOF
     summary_ok "GNOME configuration"
 }
 
-# ─── Section 18: Dotfiles ────────────────────────────────────────────────────
+# ─── Section 20: Dotfiles ────────────────────────────────────────────────────
 
 setup_dotfiles() {
-    log_section "Section 19: Dotfiles"
+    log_section "Section 20: Dotfiles"
 
     local FILES=(
         ".zshrc"
@@ -923,10 +977,10 @@ setup_dotfiles() {
     summary_ok "Dotfiles"
 }
 
-# ─── Section 19: Default Shell ───────────────────────────────────────────────
+# ─── Section 21: Default Shell ───────────────────────────────────────────────
 
 set_default_shell() {
-    log_section "Section 20: Default Shell"
+    log_section "Section 21: Default Shell"
 
     local ZSH_PATH
     ZSH_PATH="$(command -v zsh)"
@@ -998,6 +1052,7 @@ main() {
     run_section packages      install_packages
     run_section ms-fonts      install_ms_fonts
     run_section extra-tools   install_extra_tools
+    run_section ghostty       install_ghostty
     run_section flatpak       setup_flatpak
     run_section nvidia        install_nvidia
     run_section fonts         install_fonts
