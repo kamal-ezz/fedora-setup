@@ -7,10 +7,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$HOME/.fedora-setup.log"
 DOTFILES_DIR="$SCRIPT_DIR/dotfiles"
 BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
+START_TIME=$(date +%s)
+
+declare -a SUMMARY=()
 
 source "$SCRIPT_DIR/lib/colors.sh"
 source "$SCRIPT_DIR/lib/utils.sh"
 source "$SCRIPT_DIR/lib/checks.sh"
+
+summary_ok()   { SUMMARY+=("  ${GREEN}✓${NC}  $*"); }
+summary_skip() { SUMMARY+=("  ${YELLOW}→${NC}  $*"); }
+summary_fail() { SUMMARY+=("  ${RED}✗${NC}  $*"); }
 
 # ─── Section 2: Git Config ────────────────────────────────────────────────────
 
@@ -19,6 +26,7 @@ configure_git() {
 
     if [[ -f "$HOME/.gitconfig" ]]; then
         log_warn "~/.gitconfig already exists, skipping"
+        summary_skip "Git config (already exists)"
         return
     fi
 
@@ -28,6 +36,7 @@ configure_git() {
     git config --global user.email "$GIT_EMAIL"
     git config --global init.defaultBranch main
     log_info "Git config written."
+    summary_ok "Git config"
 }
 
 # ─── Section 3: Repositories ─────────────────────────────────────────────────
@@ -36,19 +45,13 @@ enable_repos() {
     log_section "Section 3: Enable Repositories"
 
     # dnf-plugins-core is required for dnf config-manager and dnf copr
-    if ! pkg_installed dnf-plugins-core; then
-        log_info "Installing dnf-plugins-core..."
-        sudo dnf install -y dnf-plugins-core 2>&1 | tee -a "$LOG_FILE"
-    else
-        log_warn "dnf-plugins-core already installed"
-    fi
+    dnf_install_bulk dnf-plugins-core
 
     # RPM Fusion Free
     if ! pkg_installed rpmfusion-free-release; then
         log_info "Enabling RPM Fusion Free..."
         sudo dnf install -y \
-            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
-            2>&1 | tee -a "$LOG_FILE"
+            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
     else
         log_warn "RPM Fusion Free already enabled"
     fi
@@ -57,8 +60,7 @@ enable_repos() {
     if ! pkg_installed rpmfusion-nonfree-release; then
         log_info "Enabling RPM Fusion Nonfree..."
         sudo dnf install -y \
-            "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" \
-            2>&1 | tee -a "$LOG_FILE"
+            "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
     else
         log_warn "RPM Fusion Nonfree already enabled"
     fi
@@ -83,132 +85,14 @@ EOF
     if [[ ! -f /etc/yum.repos.d/docker-ce.repo ]]; then
         log_info "Adding Docker CE repository..."
         sudo dnf config-manager addrepo \
-            --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo \
-            2>&1 | tee -a "$LOG_FILE"
+            --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo
     else
         log_warn "Docker CE repo already configured"
     fi
 
-    # PyCharm COPR
-    if ! sudo dnf copr list --enabled 2>/dev/null | grep -q "phracek/PyCharm"; then
-        log_info "Enabling PyCharm COPR..."
-        sudo dnf copr enable -y phracek/PyCharm 2>&1 | tee -a "$LOG_FILE"
-    else
-        log_warn "PyCharm COPR already enabled"
-    fi
-}
-
-# ─── Section 4: System Upgrade ───────────────────────────────────────────────
-
-system_upgrade() {
-    log_section "Section 4: System Upgrade"
-    log_info "Running dnf upgrade (this may take a while)..."
-    sudo dnf upgrade -y 2>&1 | tee -a "$LOG_FILE"
-}
-
-# ─── Section 5: Package Installation ─────────────────────────────────────────
-
-install_packages() {
-    log_section "Section 5: Package Installation"
-
-    local SYSTEM_TOOLS=(
-        zsh git gh curl wget unzip tar bat fzf htop cabextract
-    )
-
-    local DEV_TOOLS=(
-        docker-ce docker-ce-cli containerd.io
-        podman
-        python3 python3-pip
-        java-21-openjdk
-    )
-
-    local MEDIA=(
-        vlc
-        ffmpeg
-        gstreamer1-plugins-good
-        gstreamer1-plugins-bad-free
-        gstreamer1-plugins-ugly
-        gstreamer1-libav
-        mozilla-openh264
-        gamemode
-    )
-
-    local APPS=(
-        google-chrome-stable
-        ghostty
-        libreoffice
-        steam
-        papirus-icon-theme
-        gnome-shell-extension-dash-to-dock
-        gnome-shell-extension-appindicator
-        gnome-shell-extension-manager
-        google-noto-sans-arabic-fonts
-        google-noto-naskh-arabic-fonts
-        amiri-fonts
-    )
-
-    for pkg in "${SYSTEM_TOOLS[@]}" "${DEV_TOOLS[@]}" "${MEDIA[@]}" "${APPS[@]}"; do
-        dnf_install "$pkg"
-    done
-}
-
-# ─── Section 5b: Microsoft Fonts ─────────────────────────────────────────────
-
-install_ms_fonts() {
-    log_section "Section 5b: Microsoft Fonts"
-
-    if rpm -q msttcore-fonts-installer &>/dev/null; then
-        log_warn "Microsoft fonts already installed, skipping"
-        return
-    fi
-
-    local RPM_URL="https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm"
-    local TMP_RPM="/tmp/msttcore-fonts-installer.rpm"
-
-    log_info "Downloading Microsoft fonts installer..."
-    curl -fLo "$TMP_RPM" "$RPM_URL" 2>&1 | tee -a "$LOG_FILE"
-    sudo dnf install -y "$TMP_RPM" 2>&1 | tee -a "$LOG_FILE"
-    rm -f "$TMP_RPM"
-    log_info "Microsoft fonts installed."
-}
-
-# ─── Section 5c: yt-dlp, Neovim, VS Code ─────────────────────────────────────
-
-install_extra_tools() {
-    log_section "Section 5c: yt-dlp, Neovim, VS Code"
-
-    mkdir -p "$HOME/.local/bin"
-
-    # yt-dlp
-    if cmd_exists yt-dlp; then
-        log_warn "yt-dlp already installed"
-    else
-        log_info "Installing yt-dlp..."
-        curl -fLo "$HOME/.local/bin/yt-dlp" \
-            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
-        chmod +x "$HOME/.local/bin/yt-dlp"
-        log_info "yt-dlp installed."
-    fi
-
-    # Neovim (tarball → /opt/nvim)
-    if cmd_exists nvim; then
-        log_warn "Neovim already installed"
-    else
-        log_info "Installing Neovim..."
-        local NVIM_TMP="/tmp/nvim-linux-x86_64.tar.gz"
-        curl -fLo "$NVIM_TMP" \
-            https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
-        sudo tar -C /opt -xzf "$NVIM_TMP"
-        sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
-        rm -f "$NVIM_TMP"
-        log_info "Neovim installed."
-    fi
-
-    # VS Code (Microsoft repo)
-    if cmd_exists code; then
-        log_warn "VS Code already installed"
-    else
-        log_info "Installing VS Code..."
+    # VS Code
+    if [[ ! -f /etc/yum.repos.d/vscode.repo ]]; then
+        log_info "Adding VS Code repository..."
         sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
         sudo tee /etc/yum.repos.d/vscode.repo > /dev/null <<'EOF'
 [code]
@@ -218,8 +102,118 @@ enabled=1
 gpgcheck=1
 gpgkey=https://packages.microsoft.com/keys/microsoft.asc
 EOF
-        sudo dnf install -y code 2>&1 | tee -a "$LOG_FILE"
-        log_info "VS Code installed."
+    else
+        log_warn "VS Code repo already configured"
+    fi
+
+    # PyCharm COPR
+    if ! sudo dnf copr list --enabled 2>/dev/null | grep -q "phracek/PyCharm"; then
+        log_info "Enabling PyCharm COPR..."
+        sudo dnf copr enable -y phracek/PyCharm
+    else
+        log_warn "PyCharm COPR already enabled"
+    fi
+
+    summary_ok "Repositories"
+}
+
+# ─── Section 4: System Upgrade ───────────────────────────────────────────────
+
+system_upgrade() {
+    log_section "Section 4: System Upgrade"
+    log_info "Running dnf upgrade (this may take a while)..."
+    sudo dnf upgrade -y
+    summary_ok "System upgrade"
+}
+
+# ─── Section 5: Package Installation ─────────────────────────────────────────
+
+install_packages() {
+    log_section "Section 5: Package Installation"
+
+    dnf_install_bulk \
+        `# System tools` \
+        zsh git gh curl wget unzip tar bat fzf htop cabextract \
+        `# Dev tools` \
+        docker-ce docker-ce-cli containerd.io podman \
+        python3 python3-pip java-21-openjdk \
+        `# Media & codecs` \
+        vlc ffmpeg \
+        gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+        gstreamer1-plugins-ugly gstreamer1-libav \
+        mozilla-openh264 gamemode \
+        `# Apps` \
+        google-chrome-stable ghostty libreoffice steam code \
+        `# GNOME` \
+        papirus-icon-theme \
+        gnome-shell-extension-dash-to-dock \
+        gnome-shell-extension-appindicator \
+        gnome-shell-extension-manager \
+        `# Fonts` \
+        google-noto-sans-arabic-fonts \
+        google-noto-naskh-arabic-fonts \
+        amiri-fonts \
+        `# Bluetooth` \
+        bluez
+
+    summary_ok "Packages"
+}
+
+# ─── Section 5b: Microsoft Fonts ─────────────────────────────────────────────
+
+install_ms_fonts() {
+    log_section "Section 5b: Microsoft Fonts"
+
+    if rpm -q msttcore-fonts-installer &>/dev/null; then
+        log_warn "Microsoft fonts already installed, skipping"
+        summary_skip "Microsoft fonts (already installed)"
+        return
+    fi
+
+    local TMP_RPM="/tmp/msttcore-fonts-installer.rpm"
+    log_info "Downloading Microsoft fonts installer..."
+    curl -fLo "$TMP_RPM" \
+        "https://downloads.sourceforge.net/project/mscorefonts2/rpms/msttcore-fonts-installer-2.6-1.noarch.rpm"
+    sudo dnf install -y "$TMP_RPM"
+    rm -f "$TMP_RPM"
+    log_info "Microsoft fonts installed."
+    summary_ok "Microsoft fonts"
+}
+
+# ─── Section 5c: yt-dlp and Neovim ───────────────────────────────────────────
+
+install_extra_tools() {
+    log_section "Section 5c: yt-dlp and Neovim"
+
+    mkdir -p "$HOME/.local/bin"
+
+    # yt-dlp
+    if cmd_exists yt-dlp; then
+        log_warn "yt-dlp already installed"
+        summary_skip "yt-dlp (already installed)"
+    else
+        log_info "Installing yt-dlp..."
+        curl -fLo "$HOME/.local/bin/yt-dlp" \
+            https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+        chmod +x "$HOME/.local/bin/yt-dlp"
+        log_info "yt-dlp installed."
+        summary_ok "yt-dlp"
+    fi
+
+    # Neovim (tarball → /opt/nvim)
+    if cmd_exists nvim; then
+        log_warn "Neovim already installed"
+        summary_skip "Neovim (already installed)"
+    else
+        log_info "Installing Neovim..."
+        local NVIM_TMP="/tmp/nvim-linux-x86_64.tar.gz"
+        curl -fLo "$NVIM_TMP" \
+            https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
+        sudo tar -C /opt -xzf "$NVIM_TMP"
+        sudo ln -sf /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim
+        rm -f "$NVIM_TMP"
+        log_info "Neovim installed."
+        summary_ok "Neovim"
     fi
 }
 
@@ -230,6 +224,7 @@ install_nvidia() {
 
     if pkg_installed akmod-nvidia; then
         log_warn "akmod-nvidia already installed, skipping"
+        summary_skip "NVIDIA drivers (already installed)"
         return
     fi
 
@@ -238,8 +233,7 @@ install_nvidia() {
         akmod-nvidia \
         xorg-x11-drv-nvidia-cuda \
         nvidia-vaapi-driver \
-        nvidia-settings \
-        2>&1 | tee -a "$LOG_FILE"
+        nvidia-settings
 
     echo ""
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -247,6 +241,7 @@ install_nvidia() {
     log_warn "  Do NOT skip the reboot at the end of this script."
     log_warn "  If Secure Boot is enabled, you must enroll the MOK key."
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    summary_ok "NVIDIA drivers (reboot required)"
 }
 
 # ─── Section 7: Fonts ─────────────────────────────────────────────────────────
@@ -259,6 +254,7 @@ install_fonts() {
 
     if [[ -f "$FONT_CHECK" ]]; then
         log_warn "MesloLGS NF already installed, skipping"
+        summary_skip "MesloLGS NF fonts (already installed)"
         return
     fi
 
@@ -276,8 +272,9 @@ install_fonts() {
         curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
     done
 
-    fc-cache -fv "$FONT_DIR" 2>&1 | tee -a "$LOG_FILE"
+    fc-cache -fv "$FONT_DIR"
     log_info "MesloLGS NF installed and font cache updated."
+    summary_ok "MesloLGS NF fonts"
 }
 
 # ─── Section 8: Oh My Zsh + Powerlevel10k + Plugins ─────────────────────────
@@ -290,9 +287,11 @@ install_shell_extras() {
         log_warn "Oh My Zsh already installed"
     else
         log_info "Installing Oh My Zsh..."
-        RUNZSH=no CHSH=no sh -c \
-            "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
-            2>&1 | tee -a "$LOG_FILE"
+        local OMZ_SCRIPT="/tmp/omz-install.sh"
+        curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh \
+            -o "$OMZ_SCRIPT"
+        RUNZSH=no CHSH=no bash "$OMZ_SCRIPT"
+        rm -f "$OMZ_SCRIPT"
     fi
 
     local ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
@@ -301,7 +300,7 @@ install_shell_extras() {
     if [[ ! -d "$ZSH_CUSTOM/themes/powerlevel10k" ]]; then
         log_info "Installing Powerlevel10k..."
         git clone --depth=1 https://github.com/romkatv/powerlevel10k.git \
-            "$ZSH_CUSTOM/themes/powerlevel10k" 2>&1 | tee -a "$LOG_FILE"
+            "$ZSH_CUSTOM/themes/powerlevel10k"
     else
         log_warn "Powerlevel10k already installed"
     fi
@@ -316,15 +315,16 @@ install_shell_extras() {
     for plugin in "${!PLUGINS[@]}"; do
         if [[ ! -d "$ZSH_CUSTOM/plugins/$plugin" ]]; then
             log_info "Installing plugin: $plugin..."
-            git clone --depth=1 "${PLUGINS[$plugin]}" "$ZSH_CUSTOM/plugins/$plugin" \
-                2>&1 | tee -a "$LOG_FILE"
+            git clone --depth=1 "${PLUGINS[$plugin]}" "$ZSH_CUSTOM/plugins/$plugin"
         else
             log_warn "Plugin $plugin already installed"
         fi
     done
+
+    summary_ok "Oh My Zsh + Powerlevel10k + plugins"
 }
 
-# ─── Section 9: fnm + Node.js LTS ────────────────────────────────────────────
+# ─── Section 9: fnm + Node.js LTS + global packages ─────────────────────────
 
 install_node() {
     log_section "Section 9: fnm + Node.js LTS"
@@ -336,61 +336,60 @@ install_node() {
         log_warn "fnm already installed"
     else
         log_info "Installing fnm..."
-        curl -fsSL https://fnm.vercel.app/install | bash \
-            --install-dir "$HOME/.local/bin" --skip-shell \
-            2>&1 | tee -a "$LOG_FILE"
+        local FNM_SCRIPT="/tmp/fnm-install.sh"
+        curl -fsSL https://fnm.vercel.app/install -o "$FNM_SCRIPT"
+        bash "$FNM_SCRIPT" --install-dir "$HOME/.local/bin" --skip-shell
+        rm -f "$FNM_SCRIPT"
     fi
 
-    if [[ -x "$FNM_BIN" ]]; then
-        log_info "Installing Node.js LTS via fnm..."
-        "$FNM_BIN" install --lts 2>&1 | tee -a "$LOG_FILE"
-        "$FNM_BIN" default lts-latest 2>&1 | tee -a "$LOG_FILE"
-        log_info "Node.js LTS installed and set as default."
-    else
+    if [[ ! -x "$FNM_BIN" ]]; then
         log_error "fnm binary not found at $FNM_BIN after install."
+        summary_fail "fnm + Node.js"
         return 1
     fi
 
-    # Resolve npm from fnm-managed Node
+    log_info "Installing Node.js LTS via fnm..."
+    "$FNM_BIN" install --lts
+    "$FNM_BIN" default lts-latest
+    log_info "Node.js LTS installed and set as default."
+
     local NPM_BIN
     NPM_BIN="$("$FNM_BIN" exec --using=lts-latest which npm 2>/dev/null)"
 
     if [[ -z "$NPM_BIN" ]]; then
         log_error "npm not found via fnm; skipping global npm packages."
+        summary_fail "npm global packages"
         return 1
     fi
 
-    log_info "Installing Claude Code..."
-    if "$NPM_BIN" list -g @anthropic-ai/claude-code &>/dev/null; then
-        log_warn "Claude Code already installed"
-    else
-        "$NPM_BIN" install -g @anthropic-ai/claude-code 2>&1 | tee -a "$LOG_FILE"
-    fi
+    local NPM_GLOBALS=(
+        "@anthropic-ai/claude-code"
+        "@earendil-works/pi-coding-agent"
+        "pnpm"
+    )
 
-    log_info "Installing pi coding agent..."
-    if "$NPM_BIN" list -g @earendil-works/pi-coding-agent &>/dev/null; then
-        log_warn "pi already installed"
-    else
-        "$NPM_BIN" install -g @earendil-works/pi-coding-agent 2>&1 | tee -a "$LOG_FILE"
-    fi
+    for pkg in "${NPM_GLOBALS[@]}"; do
+        if "$NPM_BIN" list -g "$pkg" &>/dev/null; then
+            log_warn "$pkg already installed"
+        else
+            log_info "Installing $pkg..."
+            "$NPM_BIN" install -g "$pkg"
+        fi
+    done
 
-    log_info "Installing pnpm..."
-    if "$NPM_BIN" list -g pnpm &>/dev/null; then
-        log_warn "pnpm already installed"
-    else
-        "$NPM_BIN" install -g pnpm 2>&1 | tee -a "$LOG_FILE"
-    fi
+    summary_ok "fnm + Node.js LTS + global packages"
 }
 
-# ─── Section 9b: SSH Key Setup ───────────────────────────────────────────────
+# ─── Section 10: SSH Key Setup ────────────────────────────────────────────────
 
 setup_ssh() {
-    log_section "Section 9b: SSH Key Setup"
+    log_section "Section 10: SSH Key Setup"
 
     local SSH_KEY="$HOME/.ssh/id_ed25519"
 
     if [[ -f "$SSH_KEY" ]]; then
         log_warn "SSH key already exists at $SSH_KEY, skipping"
+        summary_skip "SSH key (already exists)"
         return
     fi
 
@@ -414,95 +413,82 @@ setup_ssh() {
     echo ""
     log_warn "Go to: https://github.com/settings/ssh/new"
     read -rp "Press Enter once you've added the key to GitHub..."
-    ssh -T git@github.com 2>&1 | tee -a "$LOG_FILE" || true
+    ssh -T git@github.com 2>&1 || true
+    summary_ok "SSH key"
 }
 
-# ─── Section 10b: Bluetooth ──────────────────────────────────────────────────
+# ─── Section 11: Docker + Bluetooth ──────────────────────────────────────────
 
-setup_bluetooth() {
-    log_section "Section 10b: Bluetooth"
+setup_services() {
+    log_section "Section 11: Docker + Bluetooth"
 
-    dnf_install bluez
-
-    if systemctl is-active --quiet bluetooth; then
-        log_warn "Bluetooth service already running"
-    else
-        log_info "Bluetooth service not running, enabling and starting..."
-        sudo systemctl enable --now bluetooth 2>&1 | tee -a "$LOG_FILE"
-        log_info "Bluetooth service started."
-    fi
-}
-
-# ─── Section 10: Docker Post-install ─────────────────────────────────────────
-
-docker_postinstall() {
-    log_section "Section 10: Docker Post-install"
-
+    # Docker
     log_info "Enabling Docker service..."
-    sudo systemctl enable --now docker containerd 2>&1 | tee -a "$LOG_FILE"
+    sudo systemctl enable --now docker containerd
 
     if groups "$USER" | grep -q docker; then
         log_warn "User $USER already in docker group"
     else
         log_info "Adding $USER to docker group..."
         sudo usermod -aG docker "$USER"
-        log_warn "Group membership active after reboot."
+        log_warn "Docker group membership active after reboot."
     fi
+
+    # Bluetooth
+    dnf_install_bulk bluez
+
+    if systemctl is-active --quiet bluetooth; then
+        log_warn "Bluetooth service already running"
+    else
+        log_info "Bluetooth service not running, enabling and starting..."
+        sudo systemctl enable --now bluetooth
+    fi
+
+    summary_ok "Docker + Bluetooth services"
 }
 
-# ─── Section 11: GNOME Configuration ─────────────────────────────────────────
+# ─── Section 12: GNOME Configuration ─────────────────────────────────────────
 
 configure_gnome() {
-    log_section "Section 11: GNOME Configuration"
+    log_section "Section 12: GNOME Configuration"
 
     if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
         log_warn "No D-Bus session detected (running via SSH?). Skipping GNOME settings."
+        summary_skip "GNOME config (no D-Bus session)"
         return
     fi
 
-    log_info "Setting dark mode..."
-    gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+    gsettings set org.gnome.desktop.interface color-scheme   'prefer-dark'
+    gsettings set org.gnome.desktop.interface icon-theme     'Papirus-Dark'
+    gsettings set org.gnome.desktop.input-sources sources    "[('xkb', 'us'), ('xkb', 'ara')]"
+    gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
 
-    log_info "Setting Papirus icon theme..."
-    gsettings set org.gnome.desktop.interface icon-theme 'Papirus-Dark'
-
-    log_info "Setting default browser to Google Chrome..."
     xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || \
-        log_warn "Could not set default browser (Chrome may not be installed yet)"
+        log_warn "Could not set default browser"
 
-    log_info "Setting VLC as default video player..."
     for mime in video/mp4 video/x-matroska video/x-msvideo video/webm video/quicktime; do
         xdg-mime default vlc.desktop "$mime"
     done
 
-    log_info "Adding Arabic keyboard layout..."
-    gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('xkb', 'ara')]"
-
-    log_info "Setting touchpad secondary click to corner push..."
-    gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
-
-    log_info "Setting hostname to fedora..."
     sudo hostnamectl set-hostname fedora
 
-    log_info "Setting power profile to power-saver..."
     powerprofilesctl set power-saver 2>/dev/null || \
-        log_warn "Could not set power profile (power-profiles-daemon may not be running)"
+        log_warn "Could not set power profile"
 
-    log_info "Enabling Dash to Dock extension..."
     gnome-extensions enable dash-to-dock@micxgx.gmail.com 2>/dev/null || \
-        log_warn "Could not enable Dash to Dock extension (will activate after logout/login)"
+        log_warn "Dash to Dock will activate after logout/login"
 
-    log_info "Enabling AppIndicator (system tray) extension..."
     gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com 2>/dev/null || \
-        log_warn "Could not enable AppIndicator extension (will activate after logout/login)"
+        log_warn "AppIndicator will activate after logout/login"
 
     log_warn "GNOME extensions require logout/login to activate."
+    summary_ok "GNOME configuration"
 }
 
-# ─── Section 12: Dotfiles ────────────────────────────────────────────────────
+# ─── Section 13: Dotfiles ────────────────────────────────────────────────────
 
 setup_dotfiles() {
-    log_section "Section 12: Dotfiles"
+    log_section "Section 13: Dotfiles"
 
     local FILES=(
         ".zshrc"
@@ -511,14 +497,12 @@ setup_dotfiles() {
         ".config/fontconfig/fonts.conf"
     )
 
-    mkdir -p "$BACKUP_DIR"
-
     for file in "${FILES[@]}"; do
         local target="$HOME/$file"
         local source="$DOTFILES_DIR/$file"
 
         if [[ ! -f "$source" ]]; then
-            log_warn "Not found in dotfiles repo: $file — skipping"
+            log_warn "Not found in dotfiles: $file — skipping"
             continue
         fi
 
@@ -530,33 +514,49 @@ setup_dotfiles() {
 
         mkdir -p "$(dirname "$target")"
         ln -sf "$source" "$target"
-        log_info "Symlinked ~/$file → $source"
+        log_info "Symlinked ~/$file"
     done
+
+    summary_ok "Dotfiles"
 }
 
-# ─── Section 13: Default Shell ───────────────────────────────────────────────
+# ─── Section 14: Default Shell ───────────────────────────────────────────────
 
 set_default_shell() {
-    log_section "Section 13: Default Shell"
+    log_section "Section 14: Default Shell"
 
     local ZSH_PATH
     ZSH_PATH="$(command -v zsh)"
 
     if [[ "$SHELL" == "$ZSH_PATH" ]]; then
         log_warn "zsh is already the default shell"
+        summary_skip "Default shell (already zsh)"
         return
     fi
 
     grep -qxF "$ZSH_PATH" /etc/shells || echo "$ZSH_PATH" | sudo tee -a /etc/shells > /dev/null
     chsh -s "$ZSH_PATH" "$USER"
-    log_info "Default shell changed to zsh. Effective after next login."
+    log_info "Default shell changed to zsh."
+    summary_ok "Default shell → zsh"
 }
 
-# ─── Section 14: Reboot Prompt ───────────────────────────────────────────────
+# ─── Summary + Reboot ────────────────────────────────────────────────────────
+
+print_summary() {
+    log_section "Summary"
+
+    for line in "${SUMMARY[@]}"; do
+        echo -e "$line"
+    done
+
+    echo ""
+    local END_TIME ELAPSED
+    END_TIME=$(date +%s)
+    ELAPSED=$((END_TIME - START_TIME))
+    log_info "Completed in $(printf '%dm %ds' $((ELAPSED / 60)) $((ELAPSED % 60)))"
+}
 
 reboot_prompt() {
-    log_section "Setup Complete"
-
     echo ""
     log_warn "The following require a reboot to take effect:"
     log_warn "  • NVIDIA akmod kernel module build"
@@ -576,7 +576,11 @@ reboot_prompt() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    exec > >(tee -a "$LOG_FILE") 2>&1
+    # Redirect stdout and stderr independently through tee so both
+    # appear on terminal and are written to the log file.
+    exec > >(tee -a "$LOG_FILE")
+    exec 2> >(tee -a "$LOG_FILE" >&2)
+
     log_info "Fedora setup started at $(date)"
     echo ""
 
@@ -592,11 +596,11 @@ main() {
     install_shell_extras
     install_node
     setup_ssh
-    setup_bluetooth
-    docker_postinstall
+    setup_services
     configure_gnome
     setup_dotfiles
     set_default_shell
+    print_summary
     reboot_prompt
 
     log_info "Setup completed at $(date)"
