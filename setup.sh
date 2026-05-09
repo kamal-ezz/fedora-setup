@@ -356,18 +356,20 @@ install_packages() {
     # Only swap x86_64 — i686 variants cause version-mismatch conflicts because
     # the freeworld i686 pulls in a newer mesa-vulkan-drivers.i686 than the
     # installed x86_64 version. Flatpak Steam manages its own 32-bit libs anyway.
+    # Each swap runs in a subshell so a failed DNF transaction can't poison
+    # the next DNF call (failed transactions leave the DB in a dirty state).
     for pkg in mesa-va-drivers mesa-vdpau-drivers; do
         local free_pkg="${pkg}-freeworld"
         if pkg_installed "$free_pkg"; then
             log_warn "$free_pkg already installed"
         else
             log_info "Swapping $pkg → $free_pkg..."
-            sudo dnf swap -y "$pkg" "$free_pkg" --allowerasing 2>/dev/null || \
-                sudo dnf install -y "$free_pkg" 2>/dev/null || \
-                log_warn "Could not install $free_pkg"
+            (sudo dnf swap -y "$pkg" "$free_pkg" --allowerasing) 2>/dev/null || \
+                (sudo dnf install -y "$free_pkg") 2>/dev/null || \
+                log_warn "Could not install $free_pkg — skipping"
         fi
     done
-    dnf_install_bulk libva-utils
+    (dnf_install_bulk libva-utils) || log_warn "Could not install libva-utils — skipping"
 
     # Remove preinstalled bloat
     local BLOAT=(gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan)
