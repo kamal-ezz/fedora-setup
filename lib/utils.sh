@@ -45,7 +45,38 @@ add_dnf_repo_from_url() {
     return 0
 }
 
-# Install multiple packages in one dnf call, skipping already-installed ones
+# Try to repair DNF file-conflict/multilib version mismatches, then callers retry.
+# Common case: installing Steam/Wine pulls *.i686 while installed *.x86_64 is one
+# build behind, producing "conflicts with file from package ...x86_64" errors.
+dnf_repair_transaction_conflicts() {
+    local output_file="$1"
+    local pkgs=()
+
+    if ! grep -qE 'conflicts with file from package|Rpm transaction failed|Transaction failed' "$output_file" 2>/dev/null; then
+        return 1
+    fi
+
+    # Extract package names from strings like:
+    #   mesa-vulkan-drivers-26.0.5-3.fc44.x86_64
+    #   gnutls-3.8.13-1.fc44.i686
+    # This strips from the first dash followed by a digit, leaving the name.
+    mapfile -t pkgs < <(
+        grep -oE '[A-Za-z0-9_+.-]+-[0-9][^[:space:]]*\.(x86_64|i686)' "$output_file" 2>/dev/null \
+            | sed -E 's/-[0-9].*$//' \
+            | sort -u
+    )
+
+    if [[ ${#pkgs[@]} -gt 0 ]]; then
+        log_warn "DNF transaction conflict detected; synchronizing affected packages: ${pkgs[*]}"
+        sudo dnf distro-sync --refresh -y "${pkgs[@]}" || return 1
+    else
+        log_warn "DNF transaction conflict detected; refreshing and synchronizing installed packages"
+        sudo dnf distro-sync --refresh -y || return 1
+    fi
+}
+
+# Install multiple packages in one dnf call, skipping already-installed ones.
+# On DNF transaction/file conflicts, automatically repair and retry once.
 dnf_install_bulk() {
     local to_install=()
     for pkg in "$@"; do
@@ -58,8 +89,31 @@ dnf_install_bulk() {
     if [[ ${#to_install[@]} -eq 0 ]]; then
         return
     fi
+
     log_info "Installing: ${to_install[*]}"
-    sudo dnf install -y "${to_install[@]}"
+    local dnf_log
+    dnf_log="$(mktemp /tmp/fedora-setup-dnf.XXXXXX.log)"
+
+    if sudo dnf install -y "${to_install[@]}" 2>&1 | tee "$dnf_log"; then
+        rm -f "$dnf_log"
+        return 0
+    fi
+
+    log_warn "DNF install failed; checking whether it can be repaired automatically..."
+    if dnf_repair_transaction_conflicts "$dnf_log"; then
+        log_info "Retrying install after DNF repair: ${to_install[*]}"
+        if sudo dnf install -y "${to_install[@]}"; then
+            rm -f "$dnf_log"
+            return 0
+        else
+            local status=$?
+            rm -f "$dnf_log"
+            return "$status"
+        fi
+    fi
+
+    rm -f "$dnf_log"
+    return 1
 }
 
 err_handler() {

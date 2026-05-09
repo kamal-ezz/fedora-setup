@@ -292,8 +292,8 @@ EOF
 
 system_upgrade() {
     log_section "Section 4: System Upgrade"
-    log_info "Running dnf upgrade (this may take a while)..."
-    sudo dnf upgrade -y
+    log_info "Running dnf upgrade with refreshed metadata (this may take a while)..."
+    sudo dnf upgrade --refresh -y
 
     # Firmware updates via fwupd (UEFI, SSD, peripherals)
     if cmd_exists fwupdmgr; then
@@ -312,6 +312,13 @@ system_upgrade() {
 
 install_packages() {
     log_section "Section 5: Package Installation"
+
+    # Steam/Wine pull 32-bit (i686) libraries. If installed x86_64 packages are
+    # one build behind the i686 packages in current metadata, DNF can hit file
+    # conflicts (for example mesa-vulkan-drivers or gnutls). Sync these first.
+    log_info "Synchronizing multilib-sensitive packages before installing Steam/Wine..."
+    sudo dnf distro-sync --refresh -y mesa-vulkan-drivers gnutls || \
+        log_warn "Could not synchronize mesa-vulkan-drivers/gnutls; continuing"
 
     dnf_install_bulk \
         `# System tools` \
