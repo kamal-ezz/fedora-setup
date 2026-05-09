@@ -292,7 +292,7 @@ install_packages() {
 
     dnf_install_bulk \
         `# System tools` \
-        zsh git gh curl wget unzip tar bat fzf htop cabextract \
+        zsh git gh curl wget unzip tar bat fzf htop cabextract fastfetch \
         `# Dev tools` \
         docker-ce docker-ce-cli containerd.io podman \
         python3 python3-pip java-21-openjdk \
