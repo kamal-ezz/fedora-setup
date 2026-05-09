@@ -267,6 +267,29 @@ install_node() {
         log_error "fnm binary not found at $FNM_BIN after install."
         return 1
     fi
+
+    # Resolve npm from fnm-managed Node
+    local NPM_BIN
+    NPM_BIN="$("$FNM_BIN" exec --using=lts-latest which npm 2>/dev/null)"
+
+    if [[ -z "$NPM_BIN" ]]; then
+        log_error "npm not found via fnm; skipping global npm packages."
+        return 1
+    fi
+
+    log_info "Installing Claude Code..."
+    if "$NPM_BIN" list -g @anthropic-ai/claude-code &>/dev/null; then
+        log_warn "Claude Code already installed"
+    else
+        "$NPM_BIN" install -g @anthropic-ai/claude-code 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    log_info "Installing pi coding agent..."
+    if "$NPM_BIN" list -g @earendil-works/pi-coding-agent &>/dev/null; then
+        log_warn "pi already installed"
+    else
+        "$NPM_BIN" install -g @earendil-works/pi-coding-agent 2>&1 | tee -a "$LOG_FILE"
+    fi
 }
 
 # ─── Section 10: Docker Post-install ─────────────────────────────────────────
