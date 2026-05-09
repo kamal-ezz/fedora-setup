@@ -140,6 +140,7 @@ install_packages() {
         steam
         papirus-icon-theme
         gnome-shell-extension-dash-to-dock
+        gnome-shell-extension-appindicator
         gnome-shell-extension-manager
     )
 
@@ -383,6 +384,10 @@ configure_gnome() {
     for mime in video/mp4 video/x-matroska video/x-msvideo video/webm video/quicktime; do
         xdg-mime default vlc.desktop "$mime"
     done
+
+    log_info "Enabling AppIndicator (system tray) extension..."
+    gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com 2>/dev/null || \
+        log_warn "Could not enable AppIndicator extension (will activate after logout/login)"
 
     log_warn "GNOME extensions require logout/login to activate."
 }
