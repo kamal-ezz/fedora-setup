@@ -282,7 +282,18 @@ system_upgrade() {
     log_section "Section 4: System Upgrade"
     log_info "Running dnf upgrade (this may take a while)..."
     sudo dnf upgrade -y
-    summary_ok "System upgrade"
+
+    # Firmware updates via fwupd (UEFI, SSD, peripherals)
+    if cmd_exists fwupdmgr; then
+        log_info "Checking for firmware updates..."
+        sudo fwupdmgr refresh --force 2>/dev/null || true
+        sudo fwupdmgr update --no-reboot-check 2>/dev/null || \
+            log_warn "No firmware updates available or fwupd could not connect"
+    else
+        log_warn "fwupdmgr not found, skipping firmware updates"
+    fi
+
+    summary_ok "System upgrade + firmware"
 }
 
 # ─── Section 5: Package Installation ─────────────────────────────────────────
@@ -327,6 +338,40 @@ install_packages() {
         sudo dnf swap -y ffmpeg-free ffmpeg --allowerasing
     else
         log_warn "ffmpeg already correct"
+    fi
+
+    # AMD VA-API: hardware video decode offload (reduces CPU load + improves battery)
+    for pkg in mesa-va-drivers mesa-vdpau-drivers; do
+        local free_pkg="${pkg}-freeworld"
+        if pkg_installed "$free_pkg"; then
+            log_warn "$free_pkg already installed"
+        else
+            log_info "Swapping $pkg → $free_pkg..."
+            sudo dnf swap -y "$pkg" "$free_pkg" --allowerasing 2>/dev/null || \
+                sudo dnf install -y "$free_pkg" 2>/dev/null || \
+                log_warn "Could not install $free_pkg"
+        fi
+        # 32-bit variants for Steam/Wine
+        if pkg_installed "${pkg}.i686"; then
+            local free_i686="${free_pkg}.i686"
+            if ! pkg_installed "$free_i686"; then
+                sudo dnf swap -y "${pkg}.i686" "$free_i686" --allowerasing 2>/dev/null || true
+            fi
+        fi
+    done
+    dnf_install_bulk libva-utils
+
+    # Remove preinstalled bloat
+    local BLOAT=(gnome-tour gnome-maps gnome-weather gnome-contacts gnome-clocks simple-scan)
+    local to_remove=()
+    for pkg in "${BLOAT[@]}"; do
+        pkg_installed "$pkg" && to_remove+=("$pkg")
+    done
+    if [[ ${#to_remove[@]} -gt 0 ]]; then
+        log_info "Removing bloat: ${to_remove[*]}"
+        sudo dnf remove -y "${to_remove[@]}"
+    else
+        log_warn "Bloat already removed"
     fi
 
     summary_ok "Packages"
@@ -740,7 +785,68 @@ setup_services() {
 
     sudo firewall-cmd --reload
 
-    summary_ok "Docker + Bluetooth + Firewall"
+    # Boot time: disable NetworkManager-wait-online (saves ~15-20s on desktops)
+    if systemctl is-enabled NetworkManager-wait-online.service &>/dev/null; then
+        sudo systemctl disable NetworkManager-wait-online.service
+        log_info "Disabled NetworkManager-wait-online (faster boot)"
+    else
+        log_warn "NetworkManager-wait-online already disabled"
+    fi
+
+    # SSD TRIM
+    if systemctl is-enabled fstrim.timer &>/dev/null; then
+        log_warn "fstrim.timer already enabled"
+    else
+        log_info "Enabling fstrim.timer..."
+        sudo systemctl enable --now fstrim.timer
+    fi
+
+    # zram: use zstd compression (better ratio than default lzo-rle)
+    local ZRAM_CONF="/etc/systemd/zram-generator.conf.d/zstd.conf"
+    if [[ -f "$ZRAM_CONF" ]]; then
+        log_warn "zram zstd already configured"
+    else
+        sudo mkdir -p /etc/systemd/zram-generator.conf.d
+        printf '[zram0]\ncompression-algorithm = zstd\n' | \
+            sudo tee "$ZRAM_CONF" > /dev/null
+        log_info "zram compression set to zstd (takes effect after reboot)"
+    fi
+
+    # Crypto policy: remove SHA-1 from system-wide TLS/SSH
+    if update-crypto-policies --show 2>/dev/null | grep -q "NO-SHA1"; then
+        log_warn "Crypto policy already DEFAULT:NO-SHA1"
+    else
+        sudo update-crypto-policies --set DEFAULT:NO-SHA1
+        log_info "Crypto policy set to DEFAULT:NO-SHA1"
+    fi
+
+    # DNS over TLS via systemd-resolved (Cloudflare + Quad9)
+    local DNS_CONF="/etc/systemd/resolved.conf.d/99-dns-over-tls.conf"
+    if [[ -f "$DNS_CONF" ]]; then
+        log_warn "DNS over TLS already configured"
+    else
+        sudo mkdir -p /etc/systemd/resolved.conf.d
+        sudo tee "$DNS_CONF" > /dev/null <<'EOF'
+[Resolve]
+DNS=1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net
+DNSOverTLS=yes
+DNSSEC=yes
+EOF
+        sudo systemctl restart systemd-resolved
+        log_info "DNS over TLS configured (Cloudflare + Quad9)"
+    fi
+
+    # SELinux: verify enforcing
+    if getenforce 2>/dev/null | grep -qi "enforcing"; then
+        log_warn "SELinux already enforcing"
+    else
+        log_warn "SELinux not enforcing — fixing..."
+        sudo setenforce 1
+        sudo sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+        log_info "SELinux set to enforcing"
+    fi
+
+    summary_ok "Services + system hardening"
 }
 
 # ─── Section 16: Virtualization ──────────────────────────────────────────────
@@ -1025,6 +1131,23 @@ EOF
     gsettings set org.gnome.shell.extensions.dash-to-dock background-opacity 1.0
 
     log_warn "GNOME extensions require logout/login to activate."
+
+    # Remove GNOME Software from autostart (saves 100-900 MB RAM)
+    local GNOME_SW_AUTOSTART="/etc/xdg/autostart/org.gnome.Software.desktop"
+    if [[ -f "$GNOME_SW_AUTOSTART" ]]; then
+        sudo rm -f "$GNOME_SW_AUTOSTART"
+        log_info "Removed GNOME Software from autostart"
+    else
+        log_warn "GNOME Software autostart already removed"
+    fi
+
+    # Privacy: disable automatic problem reporting (crash data to Red Hat)
+    gsettings set org.gnome.desktop.privacy report-technical-problems false
+
+    # Nautilus: show folders before files
+    gsettings set org.gtk.Settings.FileChooser sort-directories-first true
+    gsettings set org.gnome.nautilus.preferences sort-directories-first true 2>/dev/null || true
+
     summary_ok "GNOME configuration"
 }
 
