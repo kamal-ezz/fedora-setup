@@ -385,6 +385,9 @@ configure_gnome() {
         xdg-mime default vlc.desktop "$mime"
     done
 
+    log_info "Setting touchpad secondary click to corner push..."
+    gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
+
     log_info "Setting hostname to fedora..."
     sudo hostnamectl set-hostname fedora
 
