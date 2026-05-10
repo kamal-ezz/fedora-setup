@@ -1585,7 +1585,19 @@ EOF
     done
 
     # System
-    sudo hostnamectl set-hostname fedora
+    # Hostname: don't override a user-customized one. Replace only the default
+    # placeholders distros ship with (localhost, hostname-set-by-installer).
+    local current_host
+    current_host="$(hostnamectl --static 2>/dev/null || hostname)"
+    case "$current_host" in
+        localhost|localhost.localdomain|fedora|ubuntu|debian|archlinux|""|"$DISTRO")
+            sudo hostnamectl set-hostname "$DISTRO"
+            log_info "Hostname set to $DISTRO"
+            ;;
+        *)
+            log_warn "Hostname already customized ($current_host), leaving unchanged"
+            ;;
+    esac
     sudo timedatectl set-timezone Africa/Casablanca
 
     powerprofilesctl set power-saver 2>/dev/null || \
