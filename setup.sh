@@ -544,7 +544,7 @@ install_extra_tools() {
     fi
 
     # opencode Desktop — RPM from GitHub releases (anomalyco/opencode)
-    if rpm -q opencode-desktop &>/dev/null; then
+    if rpm -q opencode &>/dev/null; then
         log_warn "opencode Desktop already installed"
         summary_skip "opencode Desktop (already installed)"
     else
