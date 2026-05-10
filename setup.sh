@@ -1461,10 +1461,10 @@ setup_rice() {
     [[ -n "$CURSOR_THEME" ]] && \
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME"
 
-    gsettings set org.gnome.desktop.interface font-name          'Inter 11'
-    gsettings set org.gnome.desktop.interface document-font-name 'Inter 11'
-    gsettings set org.gnome.desktop.interface monospace-font-name 'MesloLGS NF 11'
-    gsettings set org.gnome.desktop.wm.preferences titlebar-font 'Inter Bold 11'
+    gsettings set org.gnome.desktop.interface font-name          'Inter 12'
+    gsettings set org.gnome.desktop.interface document-font-name 'Inter 12'
+    gsettings set org.gnome.desktop.interface monospace-font-name 'MesloLGS NF 12'
+    gsettings set org.gnome.desktop.wm.preferences titlebar-font 'Inter Bold 12'
 
     # GNOME extensions
     install_gnome_ext "blur-my-shell@aunetx"           "Blur my Shell"
