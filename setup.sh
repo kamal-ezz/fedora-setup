@@ -1470,6 +1470,9 @@ setup_dotfiles() {
         ".config/ghostty/config"
         ".config/fontconfig/fonts.conf"
         ".pi/agent/settings.json"
+        ".pi/agent/extensions/bell-notifications.ts"
+        ".pi/agent/extensions/clipboard-rendering.ts"
+        ".pi/agent/extensions/diff.ts"
         ".pi/agent/extensions/effort.ts"
     )
 
