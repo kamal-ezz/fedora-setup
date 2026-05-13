@@ -134,7 +134,7 @@ pkgs_fonts_arabic() {
         fedora) echo "google-noto-sans-arabic-fonts google-noto-naskh-arabic-fonts amiri-fonts" ;;
         debian) echo "fonts-noto fonts-noto-core fonts-hosny-amiri" ;;
         arch)   echo "noto-fonts ttf-amiri" ;;
-        darwin) echo "font-noto-sans-arabic" ;;  # from homebrew/cask-fonts tap
+        darwin) : ;;  # macOS ships fully-featured Arabic fonts; install extras via Font Book
     esac
 }
 

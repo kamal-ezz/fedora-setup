@@ -59,7 +59,7 @@ list_sections() {
     echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
     echo "  gnome        GNOME configuration"
-    echo "  rice         Catppuccin cursor, Inter font, Blur my Shell, Night Light"
+    echo "  rice         Catppuccin cursor, Geist font, Blur my Shell, Night Light"
     echo "  dotfiles     Dotfiles symlinks"
     echo "  shell-default  Set zsh as default shell"
     echo ""
@@ -1304,12 +1304,13 @@ install_asus_tools() {
 install_fonts() {
     log_section "Section 12: Fonts (MesloLGS NF)"
 
-    local FONT_DIR
     if is_macos; then
-        FONT_DIR="$HOME/Library/Fonts"
-    else
-        FONT_DIR="$HOME/.local/share/fonts"
+        log_warn "Font management is handled manually on macOS — install fonts via Font Book."
+        summary_skip "Fonts (managed manually on macOS)"
+        return
     fi
+
+    local FONT_DIR="$HOME/.local/share/fonts"
     local FONT_CHECK="$FONT_DIR/MesloLGS NF Regular.ttf"
 
     if [[ -f "$FONT_CHECK" ]]; then
@@ -1332,9 +1333,7 @@ install_fonts() {
         curl -fLo "$FONT_DIR/$font" "${BASE_URL}/${font// /%20}"
     done
 
-    if is_linux; then
-        fc-cache -fv "$FONT_DIR"
-    fi
+    fc-cache -fv "$FONT_DIR"
     summary_ok "MesloLGS NF fonts"
 }
 
@@ -2052,26 +2051,30 @@ setup_rice() {
         return
     fi
 
-    # Inter font
-    if ls "$HOME/.local/share/fonts/" 2>/dev/null | grep -qi "^inter"; then
-        log_warn "Inter font already installed"
+    # Geist Sans font (Vercel)
+    if ls "$HOME/.local/share/fonts/Geist" 2>/dev/null | grep -qi "^geist"; then
+        log_warn "Geist font already installed"
     else
-        log_info "Installing Inter font..."
-        local INTER_ZIP="/tmp/inter.zip"
-        local INTER_URL
-        INTER_URL=$(curl -fsSL https://api.github.com/repos/rsms/inter/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*Inter[^"]*\.zip"' \
+        log_info "Installing Geist font..."
+        local GEIST_ZIP="/tmp/geist.zip"
+        local GEIST_URL
+        GEIST_URL=$(curl -fsSL https://api.github.com/repos/vercel/geist-font/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*geist-font[^"]*\.zip"' \
             | grep -o 'https://[^"]*' | head -1 || true)
-        if [[ -z "$INTER_URL" ]]; then
-            log_warn "Could not resolve Inter font URL, skipping"
+        if [[ -z "$GEIST_URL" ]]; then
+            log_warn "Could not resolve Geist font URL, skipping"
         else
-            curl -fLo "$INTER_ZIP" "$INTER_URL"
-            mkdir -p "$HOME/.local/share/fonts/Inter"
-            unzip -q "$INTER_ZIP" "*.ttf" -d "$HOME/.local/share/fonts/Inter" 2>/dev/null || \
-                unzip -q "$INTER_ZIP" -d "$HOME/.local/share/fonts/Inter"
+            curl -fLo "$GEIST_ZIP" "$GEIST_URL"
+            mkdir -p "$HOME/.local/share/fonts/Geist"
+            # The zip ships an inner geist-font-X.Y.Z/fonts/Geist/{otf,variable}
+            # tree. Pull only the static OTFs — GNOME/GTK pick weights from
+            # those reliably; the variable TTF can confuse older renderers.
+            unzip -j -q "$GEIST_ZIP" "*/fonts/Geist/otf/*.otf" \
+                -d "$HOME/.local/share/fonts/Geist" 2>/dev/null || \
+                unzip -q "$GEIST_ZIP" -d "$HOME/.local/share/fonts/Geist"
             fc-cache -f "$HOME/.local/share/fonts"
-            rm -f "$INTER_ZIP"
-            log_info "Inter font installed."
+            rm -f "$GEIST_ZIP"
+            log_info "Geist font installed."
         fi
     fi
 
@@ -2105,10 +2108,10 @@ setup_rice() {
     [[ -n "$CURSOR_THEME" ]] && \
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME"
 
-    gsettings set org.gnome.desktop.interface font-name          'Inter 12'
-    gsettings set org.gnome.desktop.interface document-font-name 'Inter 12'
+    gsettings set org.gnome.desktop.interface font-name          'Geist 12'
+    gsettings set org.gnome.desktop.interface document-font-name 'Geist 12'
     gsettings set org.gnome.desktop.interface monospace-font-name 'MesloLGS NF 12'
-    gsettings set org.gnome.desktop.wm.preferences titlebar-font 'Inter Bold 12'
+    gsettings set org.gnome.desktop.wm.preferences titlebar-font 'Geist Bold 12'
 
     # GNOME extensions
     install_gnome_ext "blur-my-shell@aunetx"           "Blur my Shell"
