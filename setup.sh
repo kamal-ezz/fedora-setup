@@ -2159,8 +2159,12 @@ setup_dotfiles() {
     local FILES=(
         ".zshrc"
         ".p10k.zsh"
+        ".gitconfig"
+        ".gitconfig-work"
         ".config/ghostty/config"
         ".config/fontconfig/fonts.conf"
+        ".config/Code/User/settings.json"
+        ".config/opencode/opencode.jsonc"
         ".pi/agent/settings.json"
         ".pi/agent/keybindings.json"
         ".pi/agent/extensions/bell-notifications.ts"

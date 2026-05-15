@@ -4,12 +4,28 @@
 #
 # What gets snapshotted:
 #   - Zen browser mods + keyboard shortcuts (from active profile)
-#   - GNOME enabled-extensions list        (written into sync-gnome.sh)
+#   - VS Code settings
+#   - Git config
+#   - opencode config
+#   - GNOME extension list (informational)
 #   - Dotfiles are symlinked so always current; no action needed
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/colors.sh"
+
+# Copy a single file into the dotfiles tree, skipping if source doesn't exist.
+capture() {
+    local src="$1" rel="$2"
+    local dest="$SCRIPT_DIR/dotfiles/$rel"
+    if [[ ! -f "$src" ]]; then
+        log_warn "Not found: $src — skipping"
+        return
+    fi
+    mkdir -p "$(dirname "$dest")"
+    cp "$src" "$dest"
+    log_info "Captured $rel"
+}
 
 # ─── Zen ──────────────────────────────────────────────────────────────────────
 
@@ -21,44 +37,47 @@ if [[ -z "$ZEN_PROFILE_PATH" ]]; then
     log_warn "No Zen profile found — skipping"
 else
     ZEN_PROFILE="$HOME/.config/zen/$ZEN_PROFILE_PATH"
-    DEST="$SCRIPT_DIR/dotfiles/.config/zen"
-    mkdir -p "$DEST"
-
     for f in zen-themes.json zen-keyboard-shortcuts.json; do
-        if [[ -f "$ZEN_PROFILE/$f" ]]; then
-            cp "$ZEN_PROFILE/$f" "$DEST/$f"
-            log_info "Captured $f"
-        else
-            log_warn "$f not found in profile — skipping"
-        fi
+        capture "$ZEN_PROFILE/$f" ".config/zen/$f"
     done
 fi
+
+# ─── VS Code ──────────────────────────────────────────────────────────────────
+
+log_section "VS Code"
+
+VSCODE_USER="$HOME/.config/Code/User"
+capture "$VSCODE_USER/settings.json"    ".config/Code/User/settings.json"
+capture "$VSCODE_USER/keybindings.json" ".config/Code/User/keybindings.json"
+
+# ─── Git ──────────────────────────────────────────────────────────────────────
+
+log_section "Git"
+
+capture "$HOME/.gitconfig"      ".gitconfig"
+capture "$HOME/.gitconfig-work" ".gitconfig-work"
+
+# ─── opencode ─────────────────────────────────────────────────────────────────
+
+log_section "opencode"
+
+capture "$HOME/.config/opencode/opencode.jsonc" ".config/opencode/opencode.jsonc"
 
 # ─── GNOME ────────────────────────────────────────────────────────────────────
 
 log_section "GNOME"
 
-if ! command -v gsettings &>/dev/null; then
-    log_warn "gsettings not available — skipping GNOME snapshot"
-else
+if command -v gsettings &>/dev/null; then
     ENABLED_EXTS=$(gsettings get org.gnome.shell enabled-extensions 2>/dev/null || true)
-
-    if [[ -n "$ENABLED_EXTS" ]]; then
-        # Update the enabled-extensions line in sync-gnome.sh
-        SYNC="$SCRIPT_DIR/sync-gnome.sh"
-        if grep -q "gnome-extensions enable\|enabled-extensions" "$SYNC"; then
-            # Rewrite the gsettings set line for enabled-extensions if present,
-            # otherwise just report — sync-gnome.sh manages extensions via
-            # gnome-extensions enable calls, not a single gsettings set.
-            log_info "Enabled extensions: $ENABLED_EXTS"
-            log_info "(sync-gnome.sh manages extensions individually — no rewrite needed)"
-        fi
-    fi
+    [[ -n "$ENABLED_EXTS" ]] && log_info "Enabled extensions: $ENABLED_EXTS"
+    log_info "GNOME settings are managed by sync-gnome.sh — edit that file to change them"
+else
+    log_warn "gsettings not available — skipping"
 fi
 
-# ─── Git ──────────────────────────────────────────────────────────────────────
+# ─── Commit & push ────────────────────────────────────────────────────────────
 
-log_section "Git"
+log_section "Commit"
 
 cd "$SCRIPT_DIR"
 
@@ -69,7 +88,7 @@ fi
 
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
 CHANGED=$(git diff --name-only; git ls-files --others --exclude-standard)
-SUMMARY=$(echo "$CHANGED" | sed 's|dotfiles/.config/zen/||g' | sort -u | paste -sd ', ')
+SUMMARY=$(echo "$CHANGED" | sed 's|dotfiles/||g; s|\.config/||g' | sort -u | paste -sd ', ')
 
 git add -A
 git commit -m "snapshot: $TIMESTAMP — $SUMMARY"

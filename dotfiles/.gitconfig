@@ -1,0 +1,7 @@
+[user]
+	name = kamal-ezz
+	email = ezzarmou.kamal@gmail.com
+[init]
+	defaultBranch = main
+[includeIf "gitdir:~/Projects/imedia24/"]
+	path = ~/.gitconfig-work
