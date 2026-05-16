@@ -7,7 +7,7 @@
 #
 # Usage:
 #   bash setup.sh                        # run all sections
-#   bash setup.sh --only gnome dotfiles  # run only these sections
+#   bash setup.sh --only kde dotfiles    # run only these sections
 #   bash setup.sh --skip nvidia snapper  # run all except these
 #   bash setup.sh --list                 # list available sections
 set -euo pipefail
@@ -45,7 +45,7 @@ list_sections() {
     echo "  extra-tools  yt-dlp, Neovim, opencode, opencode Desktop"
     echo "  ghostty      Build Ghostty from source (zvm + Zig)"
     echo "  flatpak      Flatpak + Flathub + Spotify"
-    echo "  zen          Zen Browser (RPM build from source, Fedora only)"
+    echo "  zen          Zen Browser AppImage"
     echo "  steam-shortcuts  Fix Steam game shortcuts (add StartupWMClass for dock icons)"
     echo "  nvidia       NVIDIA drivers (auto-skips if no NVIDIA GPU)"
     echo "  asus         asusctl/supergfxctl (auto-skips if not ASUS hardware)"
@@ -58,14 +58,15 @@ list_sections() {
     echo "  virt         Virtualization (KVM/QEMU)"
     echo "  snapper      Btrfs snapshots (skipped if not Btrfs)"
     echo "  vscode       VS Code extensions + Catppuccin Mocha theme"
-    echo "  gnome        GNOME configuration"
+    echo "  gnome        GNOME configuration + Nautilus customizations"
+    echo "  kde          KDE Plasma configuration"
     echo "  rice         Catppuccin cursor, Inter font, Blur my Shell, Night Light"
     echo "  dotfiles     Dotfiles symlinks"
     echo "  relink       Re-point dotfile symlinks after the repo is moved/renamed (run as --only relink)"
     echo "  shell-default  Set zsh as default shell"
     echo ""
     echo "Examples:"
-    echo "  bash setup.sh --only gnome dotfiles"
+    echo "  bash setup.sh --only kde dotfiles"
     echo "  bash setup.sh --skip nvidia snapper virt"
     echo "  ENABLE_STRICT_CRYPTO=1 ENABLE_DNS_OVER_TLS=1 bash setup.sh --only security"
 }
@@ -118,7 +119,7 @@ should_run() {
 }
 
 # Sections that require internet access (downloads, dnf, git clone, flatpak…).
-# Anything not listed runs offline (git config, gnome settings, dotfiles, etc.).
+# Anything not listed runs offline (git config, desktop settings, dotfiles, etc.).
 NETWORK_SECTIONS=(
     repos upgrade packages ms-fonts extra-tools ghostty flatpak zen steam-components
     nvidia asus fonts shell node ssh vscode rice virt snapper
@@ -623,9 +624,14 @@ install_packages() {
                 $(pkgs_fonts_arabic) \
                 $(pkgs_bluetooth)
 
-    # GNOME-only packages (gnome-tweaks, dash-to-dock, appindicator)
+    # GNOME-only packages (gnome-tweaks, dash-to-dock, appindicator, Nautilus helpers)
     if require_desktop gnome; then
-        pkg_install $(pkgs_gnome_only)
+        pkg_install $(pkgs_gnome_only) $(pkgs_nautilus_customizations)
+    fi
+
+    # KDE-only packages (Dolphin/Konsole integration, KDE Connect, core apps)
+    if require_desktop kde; then
+        pkg_install $(pkgs_kde_only)
     fi
 
     install_chrome
@@ -944,80 +950,102 @@ setup_flatpak() {
     fi
 }
 
-# ─── Section 10: Zen Browser (RPM build) ─────────────────────────────────────
+# ─── Section 10: Zen Browser AppImage ────────────────────────────────────────
 
 install_zen() {
     log_section "Section 10: Zen Browser"
 
-    if [[ "$DISTRO" != "fedora" ]]; then
-        log_warn "Zen RPM build is Fedora-only; skipping on $DISTRO"
-        summary_skip "Zen Browser (unsupported distro)"
+    if ! is_linux; then
+        log_warn "Zen Browser AppImage is Linux-only; skipping on $DISTRO"
+        summary_skip "Zen Browser (unsupported OS)"
         return 0
     fi
 
-    if ! cmd_exists curl || ! cmd_exists rpmbuild; then
-        pkg_install curl rpm-build
-    fi
-
     local repo="zen-browser/desktop"
-    local package="zen-browser"
-    local install_prefix="/opt/zen-browser"
+    local arch appimage_name
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64) appimage_name="zen-x86_64.AppImage" ;;
+        aarch64|arm64) appimage_name="zen-aarch64.AppImage" ;;
+        *)
+            log_warn "Unsupported Zen AppImage architecture: $arch"
+            summary_skip "Zen Browser (unsupported arch)"
+            return 0
+            ;;
+    esac
 
     log_info "Fetching latest Zen Browser release info"
     local api_json
     api_json=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest") \
         || { log_warn "Failed to fetch Zen release info"; summary_fail "Zen Browser"; return 1; }
 
-    local version tarball_url sha256
-    version=$(printf '%s' "$api_json" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-    tarball_url=$(printf '%s' "$api_json" | grep '"browser_download_url"' \
-        | grep 'zen\.linux-x86_64\.tar\.xz"' \
-        | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
-    sha256=$(printf '%s' "$api_json" | grep -A1 'zen\.linux-x86_64\.tar\.xz"' \
-        | grep '"sha256"' | head -1 \
-        | sed 's/.*"sha256": *"\([^"]*\)".*/\1/' || true)
+    local version appimage_url sha256
+    version=$(printf '%s' "$api_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))')
+    read -r appimage_url sha256 < <(python3 -c '
+import json
+import sys
 
-    [[ -n "$version" ]]     || { log_warn "Could not parse Zen version"; summary_fail "Zen Browser"; return 1; }
-    [[ -n "$tarball_url" ]] || { log_warn "Could not find Zen tarball URL"; summary_fail "Zen Browser"; return 1; }
+name = sys.argv[1]
+data = json.loads(sys.stdin.read())
+for asset in data.get("assets", []):
+    if asset.get("name") == name:
+        digest = asset.get("digest", "")
+        if digest.startswith("sha256:"):
+            digest = digest.removeprefix("sha256:")
+        print(asset.get("browser_download_url", ""), digest)
+        break
+' "$appimage_name" <<< "$api_json")
 
+    [[ -n "$version" ]]      || { log_warn "Could not parse Zen version"; summary_fail "Zen Browser"; return 1; }
+    [[ -n "$appimage_url" ]] || { log_warn "Could not find Zen AppImage URL"; summary_fail "Zen Browser"; return 1; }
+
+    local app_dir="$HOME/Applications"
+    local appimage_path="$app_dir/zen-browser.AppImage"
+    local version_file="$HOME/.local/share/zen-browser/version"
     local installed_ver
-    installed_ver=$(rpm -q --queryformat '%{VERSION}' "$package" 2>/dev/null || true)
-    if [[ "$installed_ver" == "$version" ]]; then
+    installed_ver=$(cat "$version_file" 2>/dev/null || true)
+    if [[ "$installed_ver" == "$version" && -x "$appimage_path" ]]; then
         log_info "Zen Browser $version already installed"
         summary_ok "Zen Browser (already up to date)"
         return 0
     fi
     [[ -n "$installed_ver" ]] && log_info "Upgrading Zen Browser: $installed_ver → $version"
 
-    local rpmbuild_root="${HOME}/rpmbuild"
-    local sources="${rpmbuild_root}/SOURCES"
-    local specs="${rpmbuild_root}/SPECS"
-    local rpms="${rpmbuild_root}/RPMS/x86_64"
-    mkdir -p "${rpmbuild_root}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+    mkdir -p "$app_dir" "$HOME/.local/bin" "$HOME/.local/share/applications" \
+        "$HOME/.local/share/zen-browser" "$HOME/.local/share/icons/hicolor/128x128/apps"
 
-    local tarball="${sources}/zen.linux-x86_64.tar.xz"
-    local cached_ver
-    cached_ver=$(cat "${sources}/.zen_cached_version" 2>/dev/null || true)
-    if [[ "$cached_ver" != "$version" ]]; then
-        log_info "Downloading $tarball_url"
-        curl -fL# --output "$tarball" "$tarball_url"
-        if [[ -n "$sha256" ]]; then
-            log_info "Verifying checksum"
-            printf '%s  %s\n' "$sha256" "$tarball" | sha256sum --check --status \
-                || { log_warn "SHA-256 mismatch"; summary_fail "Zen Browser"; return 1; }
-        fi
-        printf '%s' "$version" > "${sources}/.zen_cached_version"
-    else
-        log_info "Tarball for $version already cached"
+    local tmp_appimage="/tmp/${appimage_name}"
+    log_info "Downloading $appimage_url"
+    curl -fL# --output "$tmp_appimage" "$appimage_url"
+    if [[ -n "$sha256" ]]; then
+        log_info "Verifying checksum"
+        printf '%s  %s\n' "$sha256" "$tmp_appimage" | sha256sum --check --status \
+            || { log_warn "SHA-256 mismatch"; summary_fail "Zen Browser"; rm -f "$tmp_appimage"; return 1; }
     fi
 
-    cat > "${sources}/zen-browser.desktop" <<EOF
+    install -m 0755 "$tmp_appimage" "$appimage_path"
+    ln -sf "$appimage_path" "$HOME/.local/bin/zen-browser"
+    rm -f "$tmp_appimage"
+
+    local tmp_extract
+    tmp_extract="$(mktemp -d /tmp/zen-appimage.XXXXXX)"
+    if (cd "$tmp_extract" && "$appimage_path" --appimage-extract >/dev/null 2>&1); then
+        local icon
+        icon=$(find "$tmp_extract/squashfs-root" -type f \( -name 'zen.png' -o -name 'zen-browser.png' -o -path '*/zen*.png' \) \
+            | sort -Vr | head -1 || true)
+        if [[ -n "$icon" ]]; then
+            install -m 0644 "$icon" "$HOME/.local/share/icons/hicolor/128x128/apps/zen-browser.png"
+        fi
+    fi
+    rm -rf "$tmp_extract"
+
+    cat > "$HOME/.local/share/applications/zen-browser.desktop" <<EOF
 [Desktop Entry]
 Version=1.0
 Name=Zen Browser
 GenericName=Web Browser
 Comment=Experience tranquil browsing with Zen Browser
-Exec=${install_prefix}/zen %u
+Exec=${appimage_path} %u
 Icon=zen-browser
 Terminal=false
 Type=Application
@@ -1027,94 +1055,9 @@ StartupWMClass=zen
 StartupNotify=true
 EOF
 
-    local today
-    today=$(date '+%a %b %d %Y')
-    cat > "${specs}/${package}.spec" <<EOF
-Name:           ${package}
-Version:        ${version}
-Release:        1%{?dist}
-Summary:        Zen Browser – a privacy-focused Firefox-based web browser
-
-License:        MPL-2.0
-URL:            https://zen-browser.app
-Source0:        zen.linux-x86_64.tar.xz
-Source1:        zen-browser.desktop
-
-ExclusiveArch:  x86_64
-
-%global debug_package %{nil}
-%global __arch_install_post /usr/lib/rpm/check-buildroot
-%define _build_id_links none
-%global QA_RPATHS 0x0002
-
-Requires:       gtk3
-Requires:       libX11
-Requires:       libXt
-Requires:       mesa-libGL
-
-%description
-Zen Browser is a privacy-focused, open-source web browser built on Firefox.
-
-%prep
-%setup -q -c -n %{name}-%{version}
-
-%install
-install -d %{buildroot}${install_prefix}
-cp -a zen/. %{buildroot}${install_prefix}/
-
-install -d %{buildroot}%{_bindir}
-cat > %{buildroot}%{_bindir}/zen-browser <<'WRAPPER'
-#!/bin/sh
-exec ${install_prefix}/zen "\\\$@"
-WRAPPER
-chmod 0755 %{buildroot}%{_bindir}/zen-browser
-
-install -D -m 0644 %{SOURCE1} %{buildroot}%{_datadir}/applications/zen-browser.desktop
-
-install -D -m 0644 zen/browser/chrome/icons/default/default16.png  %{buildroot}%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default32.png  %{buildroot}%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default48.png  %{buildroot}%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default64.png  %{buildroot}%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default128.png %{buildroot}%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
-
-%post
-/bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
-update-desktop-database -q %{_datadir}/applications &>/dev/null || :
-
-%postun
-if [ \$1 -eq 0 ]; then
-    /bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
-    gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
-fi
-update-desktop-database -q %{_datadir}/applications &>/dev/null || :
-
-%posttrans
-gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
-
-%files
-%{_bindir}/zen-browser
-${install_prefix}/
-%{_datadir}/applications/zen-browser.desktop
-%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
-%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
-%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
-%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
-%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
-
-%changelog
-* ${today} Zen Browser Packager <packager@localhost> - ${version}-1
-- Automated build of Zen Browser ${version}
-EOF
-
-    log_info "Building RPM for Zen Browser $version"
-    QA_RPATHS=0x0002 rpmbuild -ba "${specs}/${package}.spec"
-
-    local rpm
-    rpm=$(ls "${rpms}/${package}-${version}-"*.rpm 2>/dev/null | head -1)
-    [[ -n "$rpm" ]] || { log_warn "RPM not found after build"; summary_fail "Zen Browser"; return 1; }
-
-    log_info "Installing $rpm"
-    sudo dnf upgrade -y "$rpm"
+    printf '%s' "$version" > "$version_file"
+    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
     # Enable the weekly auto-updater (requires dotfiles to be symlinked first)
     if [[ -f "$HOME/.local/bin/zen-update" ]]; then
@@ -1140,7 +1083,7 @@ EOF
         log_warn "Could not detect Zen profile path — skipping mods install"
     fi
 
-    summary_ok "Zen Browser $version"
+    summary_ok "Zen Browser $version (AppImage)"
 }
 
 # ─── Section 11: Steam Runtime Components ────────────────────────────────────
@@ -1487,6 +1430,7 @@ install_node() {
     # (e.g. pi-coding-agent ships its own pi-node prefix containing pnpm,
     # which `npm list -g` against fnm's prefix would miss).
     local NPM_GLOBALS=(
+        "@openai/codex|codex"
         "@anthropic-ai/claude-code|claude"
         "@earendil-works/pi-coding-agent|pi"
         "pnpm|pnpm"
@@ -1503,6 +1447,22 @@ install_node() {
                 log_warn "Could not install $pkg — continuing"
         fi
     done
+
+    if cmd_exists bun; then
+        log_warn "bun already installed"
+    elif is_macos; then
+        log_info "Installing bun via Homebrew..."
+        brew install bun || log_warn "Could not install bun — continuing"
+    else
+        log_info "Installing bun..."
+        local BUN_SCRIPT="/tmp/bun-install.sh"
+        if curl -fsSL https://bun.sh/install -o "$BUN_SCRIPT"; then
+            bash "$BUN_SCRIPT" || log_warn "Could not install bun — continuing"
+            rm -f "$BUN_SCRIPT"
+        else
+            log_warn "Could not download bun install script — continuing"
+        fi
+    fi
 
     summary_ok "fnm + Node.js LTS + global packages"
 }
@@ -2086,8 +2046,134 @@ EOF
     # Nautilus: show folders before files
     gsettings set org.gtk.Settings.FileChooser sort-directories-first true
     gsettings set org.gnome.nautilus.preferences sort-directories-first true 2>/dev/null || true
+    gsettings set org.gnome.nautilus.preferences default-folder-viewer 'list-view' 2>/dev/null || true
+    gsettings set org.gnome.nautilus.list-view default-zoom-level 'small' 2>/dev/null || true
+
+    if gsettings list-schemas | grep -qx 'com.github.stunkymonkey.nautilus-open-any-terminal'; then
+        gsettings set com.github.stunkymonkey.nautilus-open-any-terminal terminal 'ghostty'
+        log_info "Nautilus Open Any Terminal configured to use Ghostty"
+    else
+        log_warn "Nautilus Open Any Terminal schema not available; install packages first to enable Open in Ghostty"
+    fi
+
+    if command -v nautilus >/dev/null 2>&1; then
+        nautilus -q 2>/dev/null || true
+        log_info "Nautilus preferences applied; it will reload on next launch"
+    fi
 
     summary_ok "GNOME configuration"
+}
+
+# ─── Section 20b: KDE Plasma Configuration ───────────────────────────────────
+
+kde_write() {
+    local file="$1"
+    local group="$2"
+    local key="$3"
+    local value="$4"
+
+    if command -v kwriteconfig6 >/dev/null 2>&1; then
+        kwriteconfig6 --file "$file" --group "$group" --key "$key" "$value" || \
+            log_warn "Could not write $file [$group] $key"
+    elif command -v kwriteconfig5 >/dev/null 2>&1; then
+        kwriteconfig5 --file "$file" --group "$group" --key "$key" "$value" || \
+            log_warn "Could not write $file [$group] $key"
+    else
+        log_warn "kwriteconfig not found; cannot write $file [$group] $key"
+    fi
+}
+
+configure_kde() {
+    log_section "Section 20b: KDE Plasma Configuration"
+
+    if ! require_desktop kde; then
+        log_warn "Not running KDE Plasma (detected: $DESKTOP_ENV) — skipping KDE settings."
+        summary_skip "KDE config (not on KDE)"
+        return
+    fi
+
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+        log_warn "No D-Bus session detected (running via SSH?). Skipping KDE settings."
+        summary_skip "KDE config (no D-Bus session)"
+        return
+    fi
+
+    # Interface
+    kde_write kdeglobals General ColorScheme BreezeDark
+    kde_write kdeglobals Icons Theme Papirus-Dark
+    kde_write kdeglobals KDE SingleClick false
+    kde_write kdeglobals General TerminalApplication ghostty
+
+    local cursor_theme
+    cursor_theme=$(ls "$HOME/.local/share/icons/" 2>/dev/null | grep -i "catppuccin.*mocha.*cursor" | head -1 || true)
+    if [[ -n "$cursor_theme" ]]; then
+        kde_write kdeglobals Mouse cursorTheme "$cursor_theme"
+        kde_write kcminputrc Mouse cursorTheme "$cursor_theme"
+    else
+        log_warn "Catppuccin cursor not found in ~/.local/share/icons — skipping cursor theme"
+    fi
+
+    # Fonts
+    local ui_font="Inter,12,-1,5,50,0,0,0,0,0"
+    local ui_font_bold="Inter,12,-1,5,75,0,0,0,0,0"
+    local mono_font="MesloLGS NF,12,-1,5,50,0,0,0,0,0"
+    kde_write kdeglobals General font "$ui_font"
+    kde_write kdeglobals General menuFont "$ui_font"
+    kde_write kdeglobals General toolBarFont "$ui_font"
+    kde_write kdeglobals General smallestReadableFont "Inter,10,-1,5,50,0,0,0,0,0"
+    kde_write kdeglobals General fixed "$mono_font"
+    kde_write kdeglobals WM activeFont "$ui_font_bold"
+
+    # Keyboard layouts
+    kde_write kxkbrc Layout Use true
+    kde_write kxkbrc Layout LayoutList "us,ara"
+    kde_write kxkbrc Layout VariantList ","
+
+    # Night Color (8pm → 7am, warm 4000K)
+    kde_write kwinrc NightColor Active true
+    kde_write kwinrc NightColor Mode Times
+    kde_write kwinrc NightColor EveningBeginFixed 2000
+    kde_write kwinrc NightColor MorningBeginFixed 700
+    kde_write kwinrc NightColor NightTemperature 4000
+    kde_write kwinrc NightColor TransitionTime 30
+
+    # Dolphin/File dialogs
+    kde_write dolphinrc General BrowseThroughArchives true
+    kde_write dolphinrc General OpenExternallyCalledFolderInNewTab true
+    kde_write dolphinrc General RememberOpenedTabs false
+    kde_write dolphinrc General ShowFullPath true
+    kde_write dolphinrc General ShowSelectionToggle true
+    kde_write kdeglobals "KFileDialog Settings" "Sort directories first" true
+
+    # Default apps
+    xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || \
+        log_warn "Could not set default browser"
+    for mime in video/mp4 video/x-matroska video/x-msvideo video/webm video/quicktime; do
+        xdg-mime default vlc.desktop "$mime"
+    done
+
+    # System
+    local current_host
+    current_host="$(hostnamectl --static 2>/dev/null || hostname)"
+    case "$current_host" in
+        localhost|localhost.localdomain|fedora|ubuntu|debian|archlinux|""|"$DISTRO")
+            sudo hostnamectl set-hostname "$DISTRO"
+            log_info "Hostname set to $DISTRO"
+            ;;
+        *)
+            log_warn "Hostname already customized ($current_host), leaving unchanged"
+            ;;
+    esac
+    sudo timedatectl set-timezone Africa/Casablanca
+    powerprofilesctl set power-saver 2>/dev/null || \
+        log_warn "Could not set power profile"
+
+    # Reload what can be refreshed live; the rest applies on next login.
+    qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true
+    kquitapp6 plasmashell 2>/dev/null || true
+    kstart6 plasmashell >/dev/null 2>&1 || true
+
+    summary_ok "KDE Plasma configuration"
 }
 
 # ─── Section 21: Ricing ───────────────────────────────────────────────────────
@@ -2215,6 +2301,9 @@ setup_dotfiles() {
     if is_linux; then
         FILES+=(
             ".local/bin/fix-steam-shortcuts"
+            ".local/share/nautilus/scripts/Copy Path"
+            ".local/share/nautilus/scripts/Make Executable"
+            ".local/share/nautilus/scripts/Open in Editor"
             ".config/systemd/user/fix-steam-shortcuts.service"
             ".config/systemd/user/fix-steam-shortcuts.path"
         )
@@ -2394,6 +2483,7 @@ main() {
     run_section snapper       setup_snapper
     run_section vscode        setup_vscode
     run_section gnome         configure_gnome
+    run_section kde           configure_kde
     run_section rice          setup_rice
     run_section dotfiles      setup_dotfiles
     run_section relink        relink_dotfiles

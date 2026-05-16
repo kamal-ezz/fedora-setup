@@ -31,3 +31,4 @@ palette = 15=#e0def4
 background-opacity = 0.95
 
 gtk-titlebar = true
+gtk-single-instance = false

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+count=0
+while IFS= read -r path; do
+    [[ -f "$path" ]] || continue
+    chmod +x "$path"
+    count=$((count + 1))
+done <<< "${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-}"
+
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send "Nautilus" "Made $count file(s) executable"
+fi

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+decode_file_uri() {
+    python3 - "$1" <<'PY'
+import sys
+from urllib.parse import unquote, urlparse
+
+print(unquote(urlparse(sys.argv[1]).path))
+PY
+}
+
+selected_paths() {
+    if [[ -n "${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-}" ]]; then
+        printf '%s' "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" | sed '/^$/d'
+    elif [[ "${NAUTILUS_SCRIPT_CURRENT_URI:-}" == file://* ]]; then
+        decode_file_uri "$NAUTILUS_SCRIPT_CURRENT_URI"
+    fi
+}
+
+paths="$(selected_paths)"
+[[ -z "$paths" ]] && exit 0
+
+if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$paths" | wl-copy
+elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$paths" | xclip -selection clipboard
+elif command -v xsel >/dev/null 2>&1; then
+    printf '%s' "$paths" | xsel --clipboard --input
+else
+    printf '%s\n' "$paths"
+    command -v notify-send >/dev/null 2>&1 && \
+        notify-send "Nautilus" "No clipboard tool found for Copy Path"
+fi

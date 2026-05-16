@@ -116,6 +116,28 @@ pkgs_gnome_only() {
     esac
 }
 
+# ─── Nautilus helpers ─────────────────────────────────────────────────────────
+
+pkgs_nautilus_customizations() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "sushi nautilus-open-any-terminal python3-nautilus-open-any-terminal wl-clipboard" ;;
+        debian) echo "gnome-sushi nautilus-extension-gnome-terminal nautilus-admin wl-clipboard" ;;
+        arch)   echo "sushi nautilus-open-any-terminal wl-clipboard" ;;
+        darwin) : ;;  # no Nautilus on macOS
+    esac
+}
+
+# ─── KDE-only: Plasma desktop helpers ─────────────────────────────────────────
+
+pkgs_kde_only() {
+    case "$DISTRO_FAMILY" in
+        fedora) echo "dolphin konsole kio-extras kde-connect ark spectacle gwenview okular plasma-discover-flatpak" ;;
+        debian) echo "dolphin konsole kio-extras kdeconnect ark spectacle gwenview okular plasma-discover-backend-flatpak" ;;
+        arch)   echo "dolphin konsole kio-extras kdeconnect ark spectacle gwenview okular discover flatpak-kcm" ;;
+        darwin) : ;;  # no KDE desktop setup on macOS
+    esac
+}
+
 # ─── Qt platform theming ──────────────────────────────────────────────────────
 
 pkgs_qt() {

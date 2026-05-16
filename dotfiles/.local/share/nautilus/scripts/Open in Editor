@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+decode_file_uri() {
+    python3 - "$1" <<'PY'
+import sys
+from urllib.parse import unquote, urlparse
+
+print(unquote(urlparse(sys.argv[1]).path))
+PY
+}
+
+paths=()
+while IFS= read -r path; do
+    [[ -n "$path" ]] && paths+=("$path")
+done <<< "${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-}"
+
+if [[ ${#paths[@]} -eq 0 && "${NAUTILUS_SCRIPT_CURRENT_URI:-}" == file://* ]]; then
+    paths+=("$(decode_file_uri "$NAUTILUS_SCRIPT_CURRENT_URI")")
+fi
+
+[[ ${#paths[@]} -eq 0 ]] && exit 0
+
+if command -v cursor >/dev/null 2>&1; then
+    nohup cursor "${paths[@]}" >/dev/null 2>&1 &
+elif command -v code >/dev/null 2>&1; then
+    nohup code "${paths[@]}" >/dev/null 2>&1 &
+elif command -v gnome-text-editor >/dev/null 2>&1; then
+    nohup gnome-text-editor "${paths[@]}" >/dev/null 2>&1 &
+else
+    nohup xdg-open "${paths[0]}" >/dev/null 2>&1 &
+fi

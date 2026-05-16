@@ -1,67 +1,89 @@
 #!/usr/bin/env bash
-# Checks for a newer Zen Browser release and builds+installs the RPM if needed.
+# Checks for a newer Zen Browser release and installs the Linux AppImage.
 set -euo pipefail
 
 REPO="zen-browser/desktop"
-PACKAGE="zen-browser"
-INSTALL_PREFIX="/opt/zen-browser"
 
 info()  { printf '\033[1;34m=>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die()   { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64) appimage_name="zen-x86_64.AppImage" ;;
+    aarch64|arm64) appimage_name="zen-aarch64.AppImage" ;;
+    *) die "Unsupported Zen AppImage architecture: $arch" ;;
+esac
+
 api_json=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest") \
     || die "Failed to fetch release info from GitHub"
 
-version=$(printf '%s' "$api_json" | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-tarball_url=$(printf '%s' "$api_json" | grep '"browser_download_url"' \
-    | grep 'zen\.linux-x86_64\.tar\.xz"' \
-    | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')
-sha256=$(printf '%s' "$api_json" | grep -A1 'zen\.linux-x86_64\.tar\.xz"' \
-    | grep '"sha256"' | head -1 \
-    | sed 's/.*"sha256": *"\([^"]*\)".*/\1/' || true)
+version=$(printf '%s' "$api_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))')
+read -r appimage_url sha256 < <(python3 -c '
+import json
+import sys
 
-[[ -n "$version" ]]     || die "Could not parse version"
-[[ -n "$tarball_url" ]] || die "Could not find tarball URL"
+name = sys.argv[1]
+data = json.loads(sys.stdin.read())
+for asset in data.get("assets", []):
+    if asset.get("name") == name:
+        digest = asset.get("digest", "")
+        if digest.startswith("sha256:"):
+            digest = digest.removeprefix("sha256:")
+        print(asset.get("browser_download_url", ""), digest)
+        break
+' "$appimage_name" <<< "$api_json")
 
-installed_ver=$(rpm -q --queryformat '%{VERSION}' "$PACKAGE" 2>/dev/null || true)
-if [[ "$installed_ver" == "$version" ]]; then
+[[ -n "$version" ]]      || die "Could not parse version"
+[[ -n "$appimage_url" ]] || die "Could not find Zen AppImage URL"
+
+app_dir="$HOME/Applications"
+appimage_path="$app_dir/zen-browser.AppImage"
+version_file="$HOME/.local/share/zen-browser/version"
+installed_ver=$(cat "$version_file" 2>/dev/null || true)
+
+if [[ "$installed_ver" == "$version" && -x "$appimage_path" ]]; then
     info "Zen Browser $version is already up to date"
     exit 0
 fi
 
 [[ -n "$installed_ver" ]] \
-    && info "Update available: $installed_ver → $version" \
+    && info "Update available: $installed_ver -> $version" \
     || info "Zen Browser not installed; installing $version"
 
-RPMBUILD_ROOT="${HOME}/rpmbuild"
-SOURCES="${RPMBUILD_ROOT}/SOURCES"
-SPECS="${RPMBUILD_ROOT}/SPECS"
-RPMS="${RPMBUILD_ROOT}/RPMS/x86_64"
-mkdir -p "${RPMBUILD_ROOT}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "$app_dir" "$HOME/.local/bin" "$HOME/.local/share/applications" \
+    "$HOME/.local/share/zen-browser" "$HOME/.local/share/icons/hicolor/128x128/apps"
 
-tarball="${SOURCES}/zen.linux-x86_64.tar.xz"
-cached_ver=$(cat "${SOURCES}/.zen_cached_version" 2>/dev/null || true)
-if [[ "$cached_ver" != "$version" ]]; then
-    info "Downloading $tarball_url"
-    curl -fL# --output "$tarball" "$tarball_url"
-    if [[ -n "$sha256" ]]; then
-        info "Verifying checksum"
-        printf '%s  %s\n' "$sha256" "$tarball" | sha256sum --check --status \
-            || die "SHA-256 checksum mismatch"
-    fi
-    printf '%s' "$version" > "${SOURCES}/.zen_cached_version"
-else
-    info "Tarball for $version already cached"
+tmp_appimage="/tmp/${appimage_name}"
+info "Downloading $appimage_url"
+curl -fL# --output "$tmp_appimage" "$appimage_url"
+if [[ -n "$sha256" ]]; then
+    info "Verifying checksum"
+    printf '%s  %s\n' "$sha256" "$tmp_appimage" | sha256sum --check --status \
+        || die "SHA-256 checksum mismatch"
 fi
 
-cat > "${SOURCES}/zen-browser.desktop" <<EOF
+install -m 0755 "$tmp_appimage" "$appimage_path"
+ln -sf "$appimage_path" "$HOME/.local/bin/zen-browser"
+rm -f "$tmp_appimage"
+
+tmp_extract="$(mktemp -d /tmp/zen-appimage.XXXXXX)"
+if (cd "$tmp_extract" && "$appimage_path" --appimage-extract >/dev/null 2>&1); then
+    icon=$(find "$tmp_extract/squashfs-root" -type f \( -name 'zen.png' -o -name 'zen-browser.png' -o -path '*/zen*.png' \) \
+        | sort -Vr | head -1 || true)
+    if [[ -n "$icon" ]]; then
+        install -m 0644 "$icon" "$HOME/.local/share/icons/hicolor/128x128/apps/zen-browser.png"
+    fi
+fi
+rm -rf "$tmp_extract"
+
+cat > "$HOME/.local/share/applications/zen-browser.desktop" <<EOF
 [Desktop Entry]
 Version=1.0
 Name=Zen Browser
 GenericName=Web Browser
 Comment=Experience tranquil browsing with Zen Browser
-Exec=${INSTALL_PREFIX}/zen %u
+Exec=${appimage_path} %u
 Icon=zen-browser
 Terminal=false
 Type=Application
@@ -71,90 +93,8 @@ StartupWMClass=zen
 StartupNotify=true
 EOF
 
-today=$(date '+%a %b %d %Y')
-cat > "${SPECS}/${PACKAGE}.spec" <<EOF
-Name:           ${PACKAGE}
-Version:        ${version}
-Release:        1%{?dist}
-Summary:        Zen Browser – a privacy-focused Firefox-based web browser
+printf '%s' "$version" > "$version_file"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
-License:        MPL-2.0
-URL:            https://zen-browser.app
-Source0:        zen.linux-x86_64.tar.xz
-Source1:        zen-browser.desktop
-
-ExclusiveArch:  x86_64
-
-%global debug_package %{nil}
-%global __arch_install_post /usr/lib/rpm/check-buildroot
-%define _build_id_links none
-%global QA_RPATHS 0x0002
-
-Requires:       gtk3
-Requires:       libX11
-Requires:       libXt
-Requires:       mesa-libGL
-
-%description
-Zen Browser is a privacy-focused, open-source web browser built on Firefox.
-
-%prep
-%setup -q -c -n %{name}-%{version}
-
-%install
-install -d %{buildroot}${INSTALL_PREFIX}
-cp -a zen/. %{buildroot}${INSTALL_PREFIX}/
-
-install -d %{buildroot}%{_bindir}
-cat > %{buildroot}%{_bindir}/zen-browser <<'WRAPPER'
-#!/bin/sh
-exec ${INSTALL_PREFIX}/zen "\$@"
-WRAPPER
-chmod 0755 %{buildroot}%{_bindir}/zen-browser
-
-install -D -m 0644 %{SOURCE1} %{buildroot}%{_datadir}/applications/zen-browser.desktop
-
-install -D -m 0644 zen/browser/chrome/icons/default/default16.png  %{buildroot}%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default32.png  %{buildroot}%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default48.png  %{buildroot}%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default64.png  %{buildroot}%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
-install -D -m 0644 zen/browser/chrome/icons/default/default128.png %{buildroot}%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
-
-%post
-/bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
-update-desktop-database -q %{_datadir}/applications &>/dev/null || :
-
-%postun
-if [ \$1 -eq 0 ]; then
-    /bin/touch --no-create %{_datadir}/icons/hicolor &>/dev/null || :
-    gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
-fi
-update-desktop-database -q %{_datadir}/applications &>/dev/null || :
-
-%posttrans
-gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
-
-%files
-%{_bindir}/zen-browser
-${INSTALL_PREFIX}/
-%{_datadir}/applications/zen-browser.desktop
-%{_datadir}/icons/hicolor/16x16/apps/zen-browser.png
-%{_datadir}/icons/hicolor/32x32/apps/zen-browser.png
-%{_datadir}/icons/hicolor/48x48/apps/zen-browser.png
-%{_datadir}/icons/hicolor/64x64/apps/zen-browser.png
-%{_datadir}/icons/hicolor/128x128/apps/zen-browser.png
-
-%changelog
-* ${today} Zen Browser Packager <packager@localhost> - ${version}-1
-- Automated build of Zen Browser ${version}
-EOF
-
-info "Building RPM for Zen Browser $version"
-QA_RPATHS=0x0002 rpmbuild -ba "${SPECS}/${PACKAGE}.spec"
-
-rpm_path=$(ls "${RPMS}/${PACKAGE}-${version}-"*.rpm 2>/dev/null | head -1)
-[[ -n "$rpm_path" ]] || die "RPM not found after build"
-
-info "Installing $rpm_path"
-sudo dnf upgrade -y "$rpm_path"
 info "Zen Browser updated to $version"
